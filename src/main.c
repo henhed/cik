@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <sys/mman.h>
 
@@ -43,7 +44,7 @@ main (int argc, char **argv)
           sizeof (request.s.tlen),  offsetof (Request, s.tlen),
           sizeof (request.s.vlen),  offsetof (Request, s.vlen)
           );
-  assert (sizeof (request) == 12);
+  assert (sizeof (request) == 16);
 
   CacheEntryHashMap *entry_map = NULL;
 
@@ -164,10 +165,14 @@ main (int argc, char **argv)
     UNLOCK_ENTRY (entry);
   }
 
-  for (u32 i = 0; i < 3; ++i)
+  for (s32 countdown = 4; countdown > 0;)
     {
+      int handled_requests;
       server_accept ();
-      server_read ();
+      handled_requests = server_read ();
+      if (handled_requests > 0)
+        countdown -= handled_requests;
+      sleep (0);
     }
 
   ////////////////////////////////////////

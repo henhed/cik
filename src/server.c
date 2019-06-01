@@ -29,7 +29,7 @@ static size_t num_clients = 0;
 int
 start_server ()
 {
-  server.fd = socket (AF_INET, SOCK_STREAM/* | SOCK_NONBLOCK*/, 0);
+  server.fd = socket (AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
   if (server.fd < 0)
     return errno;
 
@@ -114,24 +114,30 @@ server_accept ()
 static int
 handle_set_request (Client *client, Request *request)
 {
+  u8 *key   = NULL;
+  u8 *tag0  = NULL;
+  u8 *tag1  = NULL;
+  u8 *tag2  = NULL;
+  u8 *val   = NULL;
+
   u8  klen  = request->s.klen;
   u8  tlen0 = request->s.tlen[0];
   u8  tlen1 = request->s.tlen[1];
   u8  tlen2 = request->s.tlen[2];
   u32 vlen  = request->s.vlen;
-  size_t total_size = klen + tlen0 + tlen1 + tlen2 + vlen;
-  char buffer[total_size + 1];
+  u32 ttl   = request->s.ttl;
+
   ssize_t nread;
+  size_t  total_size = klen + tlen0 + tlen1 + tlen2 + vlen;
+  u8      buffer[total_size + 1];
+
+  key  = buffer;
+  tag0 = key + klen;
+  tag1 = tag0 + tlen0;
+  tag2 = tag1 + tlen1;
+  val  = tag2 + tlen2;
 
   // @Temporary
-  printf ("%s: Got SET request:\n\t{"
-          "klen = %u, "
-          "len[0] = %u, "
-          "len[1] = %u, "
-          "len[2] = %u, "
-          "vlen = %u}\n",
-          __FUNCTION__, klen, tlen0, tlen1, tlen2, vlen);
-
   nread = read (client->fd, buffer, total_size);
   if (nread < 0)
     return errno;
@@ -143,24 +149,20 @@ handle_set_request (Client *client, Request *request)
     }
 
   buffer[total_size] = '\0';
-  printf ("%s: Content is:\n"
-          "\tKEY: %.*s\n"
-          "\tTAG: %.*s\n"
-          "\tTAG: %.*s\n"
-          "\tTAG: %.*s\n"
-          "\tVAL: %.*s\n\n",
+  printf ("%s: Content is: {\n"
+          " TTL: %u\n"
+          " KEY: \"%.*s\"\n"
+          " TAG: \"%.*s\"\n"
+          " TAG: \"%.*s\"\n"
+          " TAG: \"%.*s\"\n"
+          " VAL: \"%.*s\"\n}\n",
           __FUNCTION__,
-          klen,
-          buffer + 0,
-          tlen0,
-          buffer + klen,
-          tlen1,
-          buffer + klen + tlen0,
-          tlen2,
-          buffer + klen + tlen0 + tlen1,
-          vlen,
-          buffer + klen + tlen0 + tlen1 + tlen2
-          );
+          ttl,
+          klen, key,
+          tlen0, tag0,
+          tlen1, tag1,
+          tlen2, tag2,
+          vlen,  val);
 
   return 0;
 }
@@ -179,22 +181,24 @@ handle_request (Client *client, Request *request)
   if (request->op == 0x73) // 's'
     {
       request->s.vlen = ntohl (request->s.vlen);
+      request->s.ttl  = ntohl (request->s.ttl);
       return handle_set_request (client, request);
     }
 
   return -ENOSYS;
 }
 
-void
+int
 server_read ()
 {
+  int nrequests = 0;
   struct epoll_event events[MAX_NUM_EVENTS] = {{ 0 }};
   int nevents = epoll_wait (server.epfd, events, MAX_NUM_EVENTS, 0);
   if (nevents < 0)
     {
       fprintf (stderr, "%s: epoll_wait failed: %s\n",
                __FUNCTION__, strerror (errno));
-      return;
+      return nevents;
     }
 
   for (int i = 0; i < nevents; ++i)
@@ -236,6 +240,8 @@ server_read ()
               client->fd = -1;
               continue;
             }
+          else
+            ++nrequests;
         }
 
       if (event->events & (EPOLLERR | EPOLLHUP))
@@ -250,6 +256,8 @@ server_read ()
           continue;
         }
     }
+
+  return nrequests;
 }
 
 void

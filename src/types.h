@@ -46,7 +46,8 @@ typedef struct
 // u8           6               Tag 1 length
 // u8           7               Tag 2 length
 // u32          8               Value length
-// ..data       12              (key + tags + value)
+// u32          12              TTL in seconds
+// ..data       16              (key + tags + value)
 
 typedef struct __attribute__((packed))
 {
@@ -59,6 +60,7 @@ typedef struct __attribute__((packed))
       u8 klen;
       u8 tlen[3];
       u32 vlen;
+      u32 ttl;
     } s;
   };
 } Request;
