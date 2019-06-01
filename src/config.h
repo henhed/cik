@@ -15,4 +15,9 @@
 //#define MAX_NUM_CACHE_ENTRIES 823117
 #define MAX_NUM_CACHE_ENTRIES 23
 
+#define SERVER_PORT 5555
+#define SERVER_BACKLOG 5
+#define MAX_NUM_CLIENTS 3
+#define MAX_NUM_EVENTS 3
+
 #endif /* ! CONFIG_H */

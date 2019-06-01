@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <errno.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -7,6 +8,7 @@
 #include <sys/mman.h>
 
 #include "entry.h"
+#include "server.h"
 
 typedef struct
 {
@@ -23,6 +25,25 @@ main (int argc, char **argv)
 {
   (void) argc;
   (void) argv;
+
+  ////////////////////////////////////////
+  // Sanity checks
+  Request request;
+  printf ("[SET] Request is %lu Bytes {\n"
+          "  cik  = %lu at %lu\n"
+          "  op   = %lu at %lu\n"
+          "  klen = %lu at %lu\n"
+          "  tlen = %lu at %lu\n"
+          "  vlen = %lu at %lu\n"
+          "}\n",
+          sizeof (request),
+          sizeof (request.cik), offsetof (Request, cik),
+          sizeof (request.op),  offsetof (Request, op),
+          sizeof (request.s.klen),  offsetof (Request, s.klen),
+          sizeof (request.s.tlen),  offsetof (Request, s.tlen),
+          sizeof (request.s.vlen),  offsetof (Request, s.vlen)
+          );
+  assert (sizeof (request) == 12);
 
   CacheEntryHashMap *entry_map = NULL;
 
@@ -71,6 +92,13 @@ main (int argc, char **argv)
     {
       fprintf (stderr, "Failed to commit %lu bytes: %s\n",
                total_memory_size, strerror (errno));
+      return EXIT_FAILURE;
+    }
+
+  printf ("Starting server on port %u\n", SERVER_PORT);
+  if (0 != start_server ())
+    {
+      fprintf (stderr, "Failed to start server: %s\n", strerror (errno));
       return EXIT_FAILURE;
     }
 
@@ -136,8 +164,17 @@ main (int argc, char **argv)
     UNLOCK_ENTRY (entry);
   }
 
+  for (u32 i = 0; i < 3; ++i)
+    {
+      server_accept ();
+      server_read ();
+    }
+
   ////////////////////////////////////////
   // Clean up
+
+  stop_server ();
+
   if (0 != munmap (memory, total_memory_size))
     {
       fprintf (stderr, "Failed to unmap %lu bytes: %s\n",
