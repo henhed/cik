@@ -5,7 +5,9 @@
 
 CacheEntryHashMap *entry_map;
 
-int  init_memory    (void);
-void release_memory (void);
+int         init_memory        (void);
+CacheEntry *reserve_and_lock   (size_t);
+void        release_memory     (void);
+void        debug_print_memory (void);
 
 #endif /* ! MEMORY_H */

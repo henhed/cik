@@ -55,9 +55,9 @@ lock_and_get_cache_entry (CacheEntryHashMap *map, u8 *k, u32 klen)
       if (map->mask[pos])
         {
           if ((map->hashes[pos] == hash)
-              && (map->entries[pos].klen == klen)
-              && ((map->entries[pos].k == k) ||
-                  (0 == memcmp (map->entries[pos].k, k, klen))))
+              && (map->entries[pos].key.nmemb == klen)
+              && ((map->entries[pos].key.base == k) ||
+                  (0 == memcmp (map->entries[pos].key.base, k, klen))))
             {
               return &map->entries[pos]; // Caller is now responsible for guard
             }
@@ -104,9 +104,9 @@ set_cache_entry (CacheEntryHashMap *map, u8 *k, u32 klen, u8 *v, u32 vlen)
       if (map->mask[pos])
         {
           if ((map->hashes[pos] == hash)
-              && (map->entries[pos].klen == klen)
-              && ((map->entries[pos].k == k) ||
-                  (0 == memcmp (map->entries[pos].k, k, klen))))
+              && (map->entries[pos].key.nmemb == klen)
+              && ((map->entries[pos].key.base == k) ||
+                  (0 == memcmp (map->entries[pos].key.base, k, klen))))
             {
 #if DEBUG
               u8 str[klen + 1];
@@ -141,11 +141,32 @@ set_cache_entry (CacheEntryHashMap *map, u8 *k, u32 klen, u8 *v, u32 vlen)
 
   map->mask[pos] = true;
   map->hashes[pos] = hash;
-  map->entries[pos].k = k;
-  map->entries[pos].klen = klen;
-  map->entries[pos].v = v;
-  map->entries[pos].vlen = vlen;
+  map->entries[pos].key.base = k;
+  map->entries[pos].key.nmemb = klen;
+  map->entries[pos].value.base = v;
+  map->entries[pos].value.nmemb = vlen;
   UNLOCK_ENTRY (&map->entries[pos]);
 
   return true;
+}
+
+void
+debug_print_entry (CacheEntry *entry)
+{
+  bool expires = (entry->expiry != CACHE_EXPIRY_INIT);
+  printf ("%s: Content is: {\n"
+          " TTL: %ld\n"
+          " KEY: \"%.*s\"\n"
+          " TAG: \"%.*s\"\n"
+          " TAG: \"%.*s\"\n"
+          " TAG: \"%.*s\"\n"
+          " VAL: \"%.*s\"\n}\n",
+          __FUNCTION__,
+          expires ? (entry->expiry - time (NULL)) : -1,
+          entry->key.nmemb,     entry->key.base,
+          entry->tags[0].nmemb, entry->tags[0].base,
+          entry->tags[1].nmemb, entry->tags[1].base,
+          entry->tags[2].nmemb, entry->tags[2].base,
+          entry->value.nmemb,   entry->value.base
+          );
 }

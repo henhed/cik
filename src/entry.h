@@ -3,12 +3,17 @@
 
 #include "types.h"
 
+#define CACHE_KEY_INIT    { 0 }
+#define CACHE_VALUE_INIT  { 0 }
+#define CACHE_TAGS_INIT   { { 0 } }
+#define CACHE_EXPIRY_INIT ((time_t) -1)
+
 #define CACHE_ENTRY_INIT (CacheEntry) { \
-  .k     = NULL,                        \
-  .klen  = 0,                           \
-  .v     = NULL,                        \
-  .vlen  = 0,                           \
-  .guard = ATOMIC_FLAG_INIT             \
+  .key    = CACHE_KEY_INIT,             \
+  .value  = CACHE_VALUE_INIT,           \
+  .tags   = CACHE_TAGS_INIT,            \
+  .expiry = CACHE_EXPIRY_INIT,          \
+  .guard  = ATOMIC_FLAG_INIT            \
 }
 
 #define LOCK_ENTRY(e) do {} while (atomic_flag_test_and_set (&(e)->guard))
@@ -17,5 +22,6 @@
 void        init_cache_entry_map     (CacheEntryHashMap *);
 CacheEntry *lock_and_get_cache_entry (CacheEntryHashMap *, u8 *, u32);
 bool        set_cache_entry          (CacheEntryHashMap *, u8 *, u32, u8 *, u32);
+void        debug_print_entry        (CacheEntry *);
 
 #endif /* ! ENTRY_H */

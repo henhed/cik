@@ -7,10 +7,12 @@
 #include <sys/mman.h>
 
 #include "memory.h"
+#include "entry.h"
 
 typedef struct
 {
   u32 size;
+  u32 cap;
   u32 nmemb;
   u8 *base;
 } Bucket;
@@ -29,22 +31,23 @@ int
 init_memory ()
 {
   // Calculate how much memory we need
-  for (u32 size = MIN_BUCKET_SIZE, nmemb = MAX_BUCKET_ENTRY_COUNT;
+  for (u32 size = MIN_BUCKET_SIZE, cap = MAX_BUCKET_ENTRY_COUNT;
        size <= MAX_BUCKET_SIZE;
-       size <<= 1, nmemb >>= 1)
+       size <<= 1, cap >>= 1)
     {
       Bucket *bucket;
       if (num_buckets >= MAX_NUM_BUCKETS)
         break;
 
-      printf ("Adding bucket %u x %u Bytes\n", nmemb, size);
+      printf ("Adding bucket %u x %u Bytes\n", cap, size);
 
       bucket = &buckets[num_buckets++];
       bucket->size  = size;
-      bucket->nmemb = nmemb;
+      bucket->cap   = cap;
+      bucket->nmemb = 0;
       bucket->base  = NULL;
 
-      total_bucket_size += size * nmemb;
+      total_bucket_size += size * cap;
     }
   printf ("Total bucket memory is %lu\n", total_bucket_size);
 
@@ -75,7 +78,7 @@ init_memory ()
   for (u32 b = 0; b < num_buckets; ++b)
     {
       Bucket *bucket = &buckets[b];
-      size_t bucket_size = bucket->size * bucket->nmemb;
+      size_t bucket_size = bucket->size * bucket->cap;
       bucket->base = memory_cursor;
       memory_cursor += bucket_size;
     }
@@ -89,6 +92,32 @@ init_memory ()
   return 0;
 }
 
+CacheEntry *
+reserve_and_lock (size_t payload_size)
+{
+  CacheEntry *entry = NULL;
+  size_t total_size = sizeof (CacheEntry) + payload_size;
+  for (u32 i = 0; i < num_buckets; ++i)
+    {
+      Bucket *bucket = &buckets[i];
+      if (bucket->size < total_size)
+        continue;
+      if (bucket->nmemb < bucket->cap)
+        {
+          u8 *memory = bucket->base + (bucket->nmemb * bucket->size);
+          entry = (CacheEntry *) memory;
+          *entry = CACHE_ENTRY_INIT;
+          LOCK_ENTRY (entry);
+          ++bucket->nmemb;
+          break;
+        }
+    }
+
+  // @Incomplete: Evict something old if entry is still NULL here
+
+  return entry;
+}
+
 void
 release_memory ()
 {
@@ -96,5 +125,22 @@ release_memory ()
     {
       fprintf (stderr, "Failed to unmap %lu bytes: %s\n",
                total_memory_size, strerror (errno));
+    }
+}
+
+void
+debug_print_memory ()
+{
+  for (u32 b = 0; b < num_buckets; ++b)
+    {
+      Bucket *bucket = &buckets[b];
+      for (u32 e = 0; e < bucket->nmemb; ++e)
+        {
+          u8 *memory = bucket->base + (e * bucket->size);
+          CacheEntry *entry = (CacheEntry *) memory;
+          LOCK_ENTRY (entry);
+          debug_print_entry (entry);
+          UNLOCK_ENTRY (entry);
+        }
     }
 }

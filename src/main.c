@@ -79,12 +79,12 @@ main (int argc, char **argv)
     assert (atomic_flag_test_and_set (&entry->guard));
 
     {
-      u8 key[entry->klen + 1];
-      u8 val[entry->vlen + 1];
-      memcpy (key, entry->k, entry->klen);
-      memcpy (val, entry->v, entry->vlen);
-      key[entry->klen] = '\0';
-      val[entry->vlen] = '\0';
+      u8 key[entry->key.nmemb + 1];
+      u8 val[entry->value.nmemb + 1];
+      memcpy (key, entry->key.base, entry->key.nmemb);
+      memcpy (val, entry->value.base, entry->value.nmemb);
+      key[entry->key.nmemb] = '\0';
+      val[entry->value.nmemb] = '\0';
       printf ("GOT \"%s\" => \"%s\"\n", key, val);
     }
 
@@ -93,13 +93,16 @@ main (int argc, char **argv)
     UNLOCK_ENTRY (entry);
   }
 
-  for (s32 countdown = 4; countdown > 0;)
+  for (s32 countdown = 10; countdown > 0;)
     {
       int handled_requests;
       server_accept ();
       handled_requests = server_read ();
       if (handled_requests > 0)
-        countdown -= handled_requests;
+        {
+          countdown -= handled_requests;
+          debug_print_memory ();
+        }
       sleep (0);
     }
 

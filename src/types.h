@@ -3,10 +3,11 @@
 
 #include "config.h"
 
+#include <netinet/in.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <netinet/in.h>
+#include <time.h>
 
 typedef int8_t   s8;
 typedef int16_t s16;
@@ -20,10 +21,30 @@ typedef _Atomic volatile u32 u32atom;
 
 typedef struct
 {
-  u8 *k;
-  u32 klen;
-  u8 *v;
-  u32 vlen;
+  u8 *base;
+  u32 nmemb;
+} CacheKey;
+
+typedef struct
+{
+  u8 *base;
+  u32 nmemb;
+} CacheValue;
+
+typedef struct
+{
+  u8 *base;
+  u8 nmemb;
+} CacheTag;
+
+typedef CacheTag CacheTagList[MAX_NUM_TAGS_PER_ENTRY];
+
+typedef struct
+{
+  CacheKey key;
+  CacheValue value;
+  CacheTagList tags;
+  time_t expiry;
   atomic_flag guard;
 } CacheEntry;
 

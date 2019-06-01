@@ -7,6 +7,8 @@
 #include <string.h>
 
 #include "server.h"
+#include "memory.h"
+#include "entry.h"
 
 typedef struct
 {
@@ -114,11 +116,7 @@ server_accept ()
 static int
 handle_set_request (Client *client, Request *request)
 {
-  u8 *key   = NULL;
-  u8 *tag0  = NULL;
-  u8 *tag1  = NULL;
-  u8 *tag2  = NULL;
-  u8 *val   = NULL;
+  CacheEntry *entry = NULL;
 
   u8  klen  = request->s.klen;
   u8  tlen0 = request->s.tlen[0];
@@ -128,41 +126,46 @@ handle_set_request (Client *client, Request *request)
   u32 ttl   = request->s.ttl;
 
   ssize_t nread;
+  u8     *buffer;
   size_t  total_size = klen + tlen0 + tlen1 + tlen2 + vlen;
-  u8      buffer[total_size + 1];
 
-  key  = buffer;
-  tag0 = key + klen;
-  tag1 = tag0 + tlen0;
-  tag2 = tag1 + tlen1;
-  val  = tag2 + tlen2;
+  // @Temporary: Read incoming payload from fd in worker thread?
+  entry = reserve_and_lock (total_size);
+  if (entry == NULL)
+    return -ENOMEM;
 
-  // @Temporary
+  buffer = (u8 *) (entry + 1);
   nread = read (client->fd, buffer, total_size);
   if (nread < 0)
-    return errno;
+    {
+      UNLOCK_ENTRY (entry);
+      return errno;
+    }
   if ((size_t) nread < total_size)
     {
+      UNLOCK_ENTRY (entry);
       fprintf (stderr, "%s: Read %ld bytes, but expected %lu\n",
                __FUNCTION__, nread, total_size);
       return -EINVAL;
     }
 
-  buffer[total_size] = '\0';
-  printf ("%s: Content is: {\n"
-          " TTL: %u\n"
-          " KEY: \"%.*s\"\n"
-          " TAG: \"%.*s\"\n"
-          " TAG: \"%.*s\"\n"
-          " TAG: \"%.*s\"\n"
-          " VAL: \"%.*s\"\n}\n",
-          __FUNCTION__,
-          ttl,
-          klen, key,
-          tlen0, tag0,
-          tlen1, tag1,
-          tlen2, tag2,
-          vlen,  val);
+  entry->key.base      = buffer;
+  entry->key.nmemb     = klen;
+  entry->tags[0].base  = entry->key.base + klen;
+  entry->tags[0].nmemb = tlen0;
+  entry->tags[1].base  = entry->tags[0].base + tlen0;
+  entry->tags[1].nmemb = tlen1;
+  entry->tags[2].base  = entry->tags[1].base + tlen1;
+  entry->tags[2].nmemb = tlen2;
+  entry->value.base    = entry->tags[2].base + tlen2;
+  entry->value.nmemb   = vlen;
+
+  if (ttl != (u32) -1)
+    entry->expiry = time (NULL) + ttl;
+
+  // @Incomplete: Entry is only added to storage here, not to lookup table
+
+  UNLOCK_ENTRY (entry);
 
   return 0;
 }
