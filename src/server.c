@@ -29,6 +29,9 @@ static Server server = { 0 };
 static Client clients[MAX_NUM_CLIENTS] = {{ 0 }};
 static size_t num_clients = 0;
 
+static void close_client (Client *);
+static void debug_print_client (Client *);
+
 int
 start_server ()
 {
@@ -99,17 +102,11 @@ server_accept ()
   event.data.ptr = client;
   if (0 > epoll_ctl (server.epfd, EPOLL_CTL_ADD, client->fd, &event))
     {
-      close (client->fd);
+      close_client (client);
       return errno;
     }
 
-  printf ("Accepted connection from %d.%d.%d.%d:%d over FD %d\n",
-          (client->addr.sin_addr.s_addr & 0x000000FF) >>  0,
-          (client->addr.sin_addr.s_addr & 0x0000FF00) >>  8,
-          (client->addr.sin_addr.s_addr & 0x00FF0000) >> 16,
-          (client->addr.sin_addr.s_addr & 0xFF000000) >> 24,
-          client->addr.sin_port,
-          client->fd);
+  debug_print_client (client);
 
   return 0;
 }
@@ -252,8 +249,7 @@ server_read ()
                        __FUNCTION__, client->fd);
               // @Revisit: Thread safety. What happens if we have a thread
               // working on a response? Also, how to respond to client?
-              close (client->fd);
-              client->fd = -1;
+              close_client (client);
               continue;
             }
           else if (nread != sizeof (request))
@@ -262,8 +258,7 @@ server_read ()
                        __FUNCTION__, client->fd, sizeof (request), nread);
               // @Revisit: Thread safety. What happens if we have a thread
               // working on a response? Also, how to respond to client?
-              close (client->fd);
-              client->fd = -1;
+              close_client (client);
               continue;
             }
           else if (0 > handle_request (client, &request))
@@ -272,8 +267,7 @@ server_read ()
                        __FUNCTION__, client->fd);
               // @Revisit: Thread safety. What happens if we have a thread
               // working on a response? Also, how to respond to client?
-              close (client->fd);
-              client->fd = -1;
+              close_client (client);
               continue;
             }
           else
@@ -304,16 +298,14 @@ server_read ()
             {
               fprintf (stderr, "%s: Failed to write to FD %d: %s\n",
                        __FUNCTION__, client->fd, strerror (errno));
-              close (client->fd);
-              client->fd = -1;
+              close_client (client);
               continue;
             }
           if (nwritten != sizeof (client->response))
             {
               fprintf (stderr, "%s: Wrote %ld but %lu was expected IF (%d)\n",
                        __FUNCTION__, nwritten, sizeof (client->response), client->fd);
-              close (client->fd);
-              client->fd = -1;
+              close_client (client);
               continue;
             }
         }
@@ -323,8 +315,7 @@ server_read ()
           // @Revisit: Thread safety. What happens if we have a thread
           // working on a response? Also, how to respond to client?
           Client *client = event->data.ptr;
-          close (client->fd);
-          client->fd = -1;
+          close_client (client);
           fprintf (stderr, "%s: Got error event: 0x%X\n",
                    __FUNCTION__, event->events);
           continue;
@@ -338,7 +329,38 @@ void
 stop_server ()
 {
   for (u32 i = 0; i < MAX_NUM_CLIENTS; ++i)
-    close (clients[i].fd);
+    close_client (&clients[i]);
   close (server.epfd);
   close (server.fd);
+}
+
+static void
+close_client (Client *client)
+{
+  if (!client || (client->fd < 0))
+    return;
+  printf ("%s: ", __FUNCTION__);
+  debug_print_client (client);
+  close (client->fd);
+  client->fd = -1;
+  client->response.cik[0] = 0x00; // Invalidate response to accept new reads
+}
+
+static void
+debug_print_client (Client *client)
+{
+  printf ("[Client] %d.%d.%d.%d:%d (FD %d)\n",
+          (client->addr.sin_addr.s_addr & 0x000000FF) >>  0,
+          (client->addr.sin_addr.s_addr & 0x0000FF00) >>  8,
+          (client->addr.sin_addr.s_addr & 0x00FF0000) >> 16,
+          (client->addr.sin_addr.s_addr & 0xFF000000) >> 24,
+          client->addr.sin_port,
+          client->fd);
+}
+
+void
+debug_print_clients ()
+{
+  for (u32 i = 0; i < MAX_NUM_CLIENTS; ++i)
+    debug_print_client (&clients[i]);
 }

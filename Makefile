@@ -15,10 +15,6 @@ INCLUDES = -I include/
 LIBS = 
 LDFLAGS =
 
-.PHONY: run
-run: release
-	@./$(BIN_NAME)
-
 .PHONY: release
 release: export CCFLAGS := $(CCFLAGS) $(COMPILER_FLAGS)
 release: dirs
@@ -43,6 +39,10 @@ all: $(BIN_PATH)/$(BIN_NAME)
 	@echo "Making symlink: $(BIN_NAME) -> $<"
 	@$(RM) $(BIN_NAME)
 	@ln -s $(BIN_PATH)/$(BIN_NAME) $(BIN_NAME)
+
+.PHONY: run
+run: release
+	@./$(BIN_NAME)
 
 $(BIN_PATH)/$(BIN_NAME): $(OBJECTS)
 	@echo "Linking: $@"

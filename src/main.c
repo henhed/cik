@@ -11,6 +11,9 @@
 #include "memory.h"
 #include "server.h"
 
+volatile bool quit;
+
+static void sigint_handler (int);
 static void test_hash_map (void);
 
 int
@@ -53,6 +56,8 @@ main (int argc, char **argv)
   // Ignore SIGPIPE so we don't get signalled when we write to a client that
   // has closed the connection. Instead write () should return -EPIPE.
   signal (SIGPIPE, SIG_IGN);
+  // Try to cleanly exit given SIGINT
+  signal (SIGINT, sigint_handler);
 
   printf ("Starting server on port %u\n", SERVER_PORT);
   if (0 != start_server ())
@@ -69,14 +74,13 @@ main (int argc, char **argv)
   init_cache_entry_map (entry_map);
   test_hash_map (); // @Temporary
 
-  for (s32 countdown = 6; countdown > 0;)
+  while (!quit)
     {
       int handled_requests;
       server_accept ();
       handled_requests = server_read ();
       if (handled_requests > 0)
         {
-          countdown -= handled_requests;
           /* debug_print_memory (); */
         }
       sleep (0);
@@ -85,10 +89,18 @@ main (int argc, char **argv)
   ////////////////////////////////////////
   // Clean up
 
+  printf ("\nShutting down ..\n");
   stop_server ();
   release_memory ();
 
   return EXIT_SUCCESS;
+}
+
+static void
+sigint_handler (int sig)
+{
+  signal (sig, SIG_DFL);
+  quit = true;
 }
 
 static void
