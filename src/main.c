@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <errno.h>
+#include <signal.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -20,21 +21,39 @@ main (int argc, char **argv)
 
   ////////////////////////////////////////
   // Sanity checks
-  Request request;
-  assert (sizeof (request.cik)       == 3);
-  assert (offsetof (Request, cik)    == 0);
-  assert (sizeof (request.op)        == 1);
-  assert (offsetof (Request, op)     == 3);
-  assert (sizeof (request.s.klen)    == 1);
-  assert (offsetof (Request, s.klen) == 4);
-  assert (sizeof (request.s.tlen)    == 3);
-  assert (offsetof (Request, s.tlen) == 5);
-  assert (sizeof (request.s.vlen)    == 4);
-  assert (offsetof (Request, s.vlen) == 8);
-  assert (sizeof (request)           == 16);
+  {
+    Request request;
+    assert (sizeof (request)           == 16);
+    assert (sizeof (request.cik)       == 3);
+    assert (sizeof (request.op)        == 1);
+    assert (sizeof (request.s.klen)    == 1);
+    assert (sizeof (request.s.tlen)    == 3);
+    assert (sizeof (request.s.vlen)    == 4);
+    assert (offsetof (Request, cik)    == 0);
+    assert (offsetof (Request, op)     == 3);
+    assert (offsetof (Request, s.klen) == 4);
+    assert (offsetof (Request, s.tlen) == 5);
+    assert (offsetof (Request, s.vlen) == 8);
+
+    Response response;
+    assert (sizeof (response)                 == 8);
+    assert (sizeof (response.cik)             == 3);
+    assert (sizeof (response.status)          == 1);
+    assert (sizeof (response.payload_size)    == 4);
+    assert (sizeof (response.error_code)      == 4);
+    assert (offsetof (Response, cik)          == 0);
+    assert (offsetof (Response, status)       == 3);
+    assert (offsetof (Response, payload_size) == 4);
+    assert (offsetof (Response, error_code)   == 4);
+  }
 
   ////////////////////////////////////////
   // Init
+
+  // Ignore SIGPIPE so we don't get signalled when we write to a client that
+  // has closed the connection. Instead write () should return -EPIPE.
+  signal (SIGPIPE, SIG_IGN);
+
   printf ("Starting server on port %u\n", SERVER_PORT);
   if (0 != start_server ())
     {
@@ -50,7 +69,7 @@ main (int argc, char **argv)
   init_cache_entry_map (entry_map);
   test_hash_map (); // @Temporary
 
-  for (s32 countdown = 4; countdown > 0;)
+  for (s32 countdown = 6; countdown > 0;)
     {
       int handled_requests;
       server_accept ();
@@ -58,7 +77,7 @@ main (int argc, char **argv)
       if (handled_requests > 0)
         {
           countdown -= handled_requests;
-          debug_print_memory ();
+          /* debug_print_memory (); */
         }
       sleep (0);
     }

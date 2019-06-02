@@ -7,6 +7,18 @@ namespace Improove;
 class CiK //implements Zend_Cache_Backend_Interface
 {
 
+    /**#@+
+     * Protocol control byte values
+     */
+    const CONTROL_BYTE_1 = 0x43; // 'C'
+    const CONTROL_BYTE_2 = 0x69; // 'i'
+    const CONTROL_BYTE_3 = 0x4B; // 'K'
+    const CMD_BYTE_SET   = 0x73; // 's'
+    const SUCCESS_BYTE   = 0x74; // 't'
+    const FAILURE_BYTE   = 0x66; // 'f'
+    /**#@-*/
+
+    /** @var resource */
     private $fd;
 
     public function __construct()
@@ -55,6 +67,7 @@ class CiK //implements Zend_Cache_Backend_Interface
             $specificLifetime === false ? null : (int) $specificLifetime
         );
         $success = $this->writeMessage($message);
+        $success = ($success && ('' === $this->readMessage()));
         return $success;
     }
 
@@ -93,10 +106,10 @@ class CiK //implements Zend_Cache_Backend_Interface
         $tag2 = array_shift($tags); // We support at most 3 tags
         $head = pack(
             'c3cCC3NN',
-            0x43, // C
-            0x69, // i
-            0x4B, // K
-            0x73, // s
+            self::CONTROL_BYTE_1,
+            self::CONTROL_BYTE_2,
+            self::CONTROL_BYTE_3,
+            self::CMD_BYTE_SET,
             $klen,
             ($tag0 !== null) ? strlen($tag0) : 0,
             ($tag1 !== null) ? strlen($tag1) : 0,
@@ -115,21 +128,73 @@ class CiK //implements Zend_Cache_Backend_Interface
             if ($fwrite === false || ($fwrite == 0 && $lastFailed)) {
                 return false;
             }
-            $lastFailed = $fwrite == 0;
+            $lastFailed = ($fwrite == 0);
         }
         return true;
+    }
+
+    private function readMessage(): string
+    {
+        $header = fread($this->fd, 8);
+        $response = unpack('c3cik/c1status/NsizeOrError', (string) $header);
+        if (!is_array($response)) {
+            throw new \Exception(sprintf(
+                'Failed to parse CiK response header: 0x%s',
+                strtoupper(bin2hex($header))
+            ));
+        }
+        if (($response['cik1'] !== self::CONTROL_BYTE_1)
+            || ($response['cik2'] !== self::CONTROL_BYTE_2)
+            || ($response['cik3'] !== self::CONTROL_BYTE_3)
+            || (($response['status'] !== self::SUCCESS_BYTE)
+                && ($response['status'] !== self::FAILURE_BYTE))
+        ) {
+            throw new \Exception(sprintf(
+                'Failed to parse CiK response header: 0x%s',
+                strtoupper(bin2hex($header))
+            ));
+        }
+        $success = ($response['status'] === self::SUCCESS_BYTE);
+        if (!$success) {
+            $errorCode = $response['sizeOrError'];
+            throw new \Exception(sprintf(
+                'CiK returned error code %d',
+                $errorCode
+            ), $errorCode);
+        }
+        $payloadSize = $response['sizeOrError'];
+        if ($payloadSize === 0) {
+            return '';
+        }
+        $payload = fread($this->fd, $payloadSize);
+        if ($payload === false) {
+            throw new \Exception(sprintf(
+                'Failed to read CiK payload, header was: 0x%s',
+                strtoupper(bin2hex($header))
+            ));
+        }
+        return $payload;
     }
 }
 
 ($_SERVER['REQUEST_URI'] == '/favicon.ico') && die;
+
+header('Content-Type: text/plain');
 
 try {
     $cik = new CiK();
     $key = 'min nyckel';
     $val = sprintf('My PID is %d', getmypid());
     $tags = ['min första tagg', 'min andra tagg', 'etc..'];
-    $cik->save($val, $key, $tags, 1337);
-    $cik->save($val . ' TAKE 2', $key, $tags);
+    $success = $cik->save($val, $key, $tags, 1337);
+    var_dump($success);
+    // Store a smaller value. This should reuse the same entry slot internally.
+    $success = $cik->save('...', $key, $tags, 10);
+    var_dump($success);
+    // Store a bigger value. This should release the old entry maybe.
+    // At least if it didn't have enough padding to store the bigger value.
+    $success = $cik->save($val . str_repeat(' TAKE 2', 100), $key, $tags);
+    var_dump($success);
 } catch (\Exception $e) {
     echo (string) $e;
 }

@@ -72,6 +72,13 @@ typedef struct
 // u32          12              TTL in seconds
 // ..data       16              (key + tags + value)
 
+#define CONTROL_BYTE_1 0x43 // 'C'
+#define CONTROL_BYTE_2 0x69 // 'i'
+#define CONTROL_BYTE_3 0x4B // 'K'
+#define CMD_BYTE_SET   0x73 // 's'
+#define SUCCESS_BYTE   0x74 // 't'
+#define FAILURE_BYTE   0x66 // 'f'
+
 typedef struct __attribute__((packed))
 {
   s8 cik[3];
@@ -87,5 +94,16 @@ typedef struct __attribute__((packed))
     } s;
   };
 } Request;
+
+typedef struct __attribute__((packed))
+{
+  s8 cik[3]; // Always ASCII 'CiK'
+  s8 status; // ASCII 't' for success of 'f' for error
+  union __attribute__((packed))
+  {
+    u32 payload_size; // Indicates size of body if status = t
+    u32 error_code;   // Error code if status = f
+  };
+} Response;
 
 #endif /* ! TYPES_H */

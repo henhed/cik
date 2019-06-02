@@ -19,6 +19,7 @@
 
 #define LOCK_ENTRY(e) do {} while (atomic_flag_test_and_set (&(e)->guard))
 #define UNLOCK_ENTRY(e) atomic_flag_clear (&(e)->guard)
+#define TRY_LOCK_ENTRY(e) (!atomic_flag_test_and_set (&(e)->guard))
 
 void        init_cache_entry_map     (CacheEntryHashMap *);
 CacheEntry *lock_and_get_cache_entry (CacheEntryHashMap *, CacheKey);

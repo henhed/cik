@@ -22,6 +22,7 @@ typedef struct
   int fd;
   struct sockaddr_in addr;
   socklen_t addrlen;
+  Response response;
 } Client;
 
 static Server server = { 0 };
@@ -116,7 +117,9 @@ server_accept ()
 static int
 handle_set_request (Client *client, Request *request)
 {
-  CacheEntry *entry = NULL;
+  // @Incomplete: Read incoming payload from fd in worker thread?
+
+  CacheEntry *entry = NULL, *old_entry = NULL;
 
   u8  klen  = request->s.klen;
   u8  tlen0 = request->s.tlen[0];
@@ -126,31 +129,50 @@ handle_set_request (Client *client, Request *request)
   u32 ttl   = request->s.ttl;
 
   ssize_t nread;
-  u8     *buffer;
+  u8     *payload;
+  u8      tmp_key_data[0xFF];
   size_t  total_size = klen + tlen0 + tlen1 + tlen2 + vlen;
+  size_t  remaining_size = total_size;
 
-  // @Temporary: Read incoming payload from fd in worker thread?
+  // Read key
+  nread = read (client->fd, tmp_key_data, klen);
+  if (nread < 0)
+    return errno;
+  if (nread != klen)
+    return EINVAL;
+  remaining_size -= nread;
+
+  // @Incomplete: Use key here and look if we have an existing entry
+  // in the hash table already. If so, reuse it's memory if possible.
+  // Right now we're always reserving new memory and releasing the old.
+
   entry = reserve_and_lock (total_size);
   if (entry == NULL)
-    return -ENOMEM;
+    return ENOMEM;
 
-  buffer = (u8 *) (entry + 1);
-  nread = read (client->fd, buffer, total_size);
+  payload = (u8 *) (entry + 1);
+
+  // Copy read key into reserved entry payload
+  memcpy (payload, tmp_key_data, klen);
+  entry->key.base = payload;
+  entry->key.nmemb = klen;
+  payload += klen;
+
+  nread = read (client->fd, payload, remaining_size);
   if (nread < 0)
     {
       UNLOCK_ENTRY (entry);
       return errno;
     }
-  if ((size_t) nread < total_size)
+  if ((size_t) nread != remaining_size)
     {
       UNLOCK_ENTRY (entry);
       fprintf (stderr, "%s: Read %ld bytes, but expected %lu\n",
-               __FUNCTION__, nread, total_size);
-      return -EINVAL;
+               __FUNCTION__, nread, remaining_size);
+      return EINVAL;
     }
+  remaining_size -= nread;
 
-  entry->key.base      = buffer;
-  entry->key.nmemb     = klen;
   entry->tags[0].base  = entry->key.base + klen;
   entry->tags[0].nmemb = tlen0;
   entry->tags[1].base  = entry->tags[0].base + tlen0;
@@ -163,7 +185,14 @@ handle_set_request (Client *client, Request *request)
   if (ttl != (u32) -1)
     entry->expiry = time (NULL) + ttl;
 
-  // @Incomplete: Entry is only added to storage here, not to lookup table
+  set_locked_cache_entry (entry_map, entry, &old_entry);
+
+  if (old_entry)
+    {
+      // @Revisit: Should we tell memory explicitly that this entry is reusable?
+      old_entry->expiry = 0;
+      UNLOCK_ENTRY (old_entry);
+    }
 
   UNLOCK_ENTRY (entry);
 
@@ -174,21 +203,21 @@ static int
 handle_request (Client *client, Request *request)
 {
   if (!client || !request)
-    return -EINVAL;
+    return EINVAL;
 
-  if ((request->cik[0] != 0x43)     // 'C'
-      || (request->cik[1] != 0x69)  // 'i'
-      || (request->cik[2] != 0x4B)) // 'K'
-    return -EINVAL;
+  if ((request->cik[0] != CONTROL_BYTE_1)
+      || (request->cik[1] != CONTROL_BYTE_2)
+      || (request->cik[2] != CONTROL_BYTE_3))
+    return EINVAL;
 
-  if (request->op == 0x73) // 's'
+  if (request->op == CMD_BYTE_SET)
     {
       request->s.vlen = ntohl (request->s.vlen);
       request->s.ttl  = ntohl (request->s.ttl);
       return handle_set_request (client, request);
     }
 
-  return -ENOSYS;
+  return ENOSYS;
 }
 
 int
@@ -211,8 +240,12 @@ server_read ()
         {
           Client *client = event->data.ptr;
           Request request = { 0 };
-          ssize_t nread = read (client->fd, &request, sizeof (request));
+          ssize_t nread;
 
+          if (client->response.cik[0] != 0x00)
+            continue; // This client has a pending response
+
+          nread = read (client->fd, &request, sizeof (request));
           if (nread == 0)
             {
               fprintf (stderr, "%s: Connection closed (FD %d)\n",
@@ -244,7 +277,45 @@ server_read ()
               continue;
             }
           else
-            ++nrequests;
+            {
+              client->response.cik[0] = CONTROL_BYTE_1;
+              client->response.cik[1] = CONTROL_BYTE_2;
+              client->response.cik[2] = CONTROL_BYTE_3;
+              client->response.status = SUCCESS_BYTE;
+              client->response.payload_size = htonl (0);
+              ++nrequests;
+            }
+        }
+
+      if (event->events & EPOLLOUT)
+        {
+          Client *client = event->data.ptr;
+          ssize_t nwritten;
+
+          // @Incomplete: Response must have variable length.
+
+          if (client->response.cik[0] == 0x00)
+            continue; // This client has no pending response
+
+          nwritten = write (client->fd, &client->response, sizeof (client->response));
+          client->response.cik[0] = 0x00; // Invalidate response to accept new reads
+
+          if (nwritten < 0)
+            {
+              fprintf (stderr, "%s: Failed to write to FD %d: %s\n",
+                       __FUNCTION__, client->fd, strerror (errno));
+              close (client->fd);
+              client->fd = -1;
+              continue;
+            }
+          if (nwritten != sizeof (client->response))
+            {
+              fprintf (stderr, "%s: Wrote %ld but %lu was expected IF (%d)\n",
+                       __FUNCTION__, nwritten, sizeof (client->response), client->fd);
+              close (client->fd);
+              client->fd = -1;
+              continue;
+            }
         }
 
       if (event->events & (EPOLLERR | EPOLLHUP))
@@ -254,7 +325,7 @@ server_read ()
           Client *client = event->data.ptr;
           close (client->fd);
           client->fd = -1;
-          fprintf (stderr, "%s: Got error event: 0x%X",
+          fprintf (stderr, "%s: Got error event: 0x%X\n",
                    __FUNCTION__, event->events);
           continue;
         }

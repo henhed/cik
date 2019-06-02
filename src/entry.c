@@ -75,7 +75,18 @@ lock_and_get_cache_entry (CacheEntryHashMap *map, CacheKey key)
         {
           if (map->hashes[pos] == hash)
             {
-              LOCK_ENTRY (map->entries[pos]);
+              if (!TRY_LOCK_ENTRY (map->entries[pos]))
+                {
+#if DEBUG
+                  fprintf (stderr, "%s: SPINNING \"%.*s\"\n", __FUNCTION__,
+                           map->entries[pos]->key.nmemb, map->entries[pos]->key.base);
+#endif
+                  LOCK_ENTRY (map->entries[pos]);
+#if DEBUG
+                  fprintf (stderr, "%s: GOT LOCK \"%.*s\"\n", __FUNCTION__,
+                           map->entries[pos]->key.nmemb, map->entries[pos]->key.base);
+#endif
+                }
               if (CMP_KEYS (map->entries[pos]->key, key))
                 {
                   UNLOCK_SLOT (map, pos);
@@ -141,7 +152,18 @@ set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
                   return true;
                 }
 
-              LOCK_ENTRY (occupant);
+              if (!TRY_LOCK_ENTRY (occupant))
+                {
+#if DEBUG
+                  fprintf (stderr, "%s: SPINNING \"%.*s\"\n",
+                           __FUNCTION__, entry->key.nmemb, entry->key.base);
+#endif
+                  LOCK_ENTRY (occupant);
+#if DEBUG
+                  fprintf (stderr, "%s: GOT LOCK \"%.*s\"\n",
+                           __FUNCTION__, entry->key.nmemb, entry->key.base);
+#endif
+                }
               if (CMP_ENTRY_KEYS (occupant, entry))
                 {
 #if DEBUG
