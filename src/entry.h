@@ -13,6 +13,7 @@
   .value  = CACHE_VALUE_INIT,           \
   .tags   = CACHE_TAGS_INIT,            \
   .expiry = CACHE_EXPIRY_INIT,          \
+  .waste  = 0,                          \
   .guard  = ATOMIC_FLAG_INIT            \
 }
 
@@ -20,8 +21,8 @@
 #define UNLOCK_ENTRY(e) atomic_flag_clear (&(e)->guard)
 
 void        init_cache_entry_map     (CacheEntryHashMap *);
-CacheEntry *lock_and_get_cache_entry (CacheEntryHashMap *, u8 *, u32);
-bool        set_cache_entry          (CacheEntryHashMap *, u8 *, u32, u8 *, u32);
+CacheEntry *lock_and_get_cache_entry (CacheEntryHashMap *, CacheKey);
+bool        set_locked_cache_entry   (CacheEntryHashMap *, CacheEntry *, CacheEntry **);
 void        debug_print_entry        (CacheEntry *);
 
 #endif /* ! ENTRY_H */

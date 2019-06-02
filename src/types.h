@@ -45,6 +45,7 @@ typedef struct
   CacheValue value;
   CacheTagList tags;
   time_t expiry;
+  u32 waste;
   atomic_flag guard;
 } CacheEntry;
 
@@ -52,8 +53,9 @@ typedef struct
 {
   u32atom nmemb;
   bool mask[MAX_NUM_CACHE_ENTRIES];
+  atomic_flag guards[MAX_NUM_CACHE_ENTRIES];
   u32 hashes[MAX_NUM_CACHE_ENTRIES];
-  CacheEntry entries[MAX_NUM_CACHE_ENTRIES];
+  CacheEntry *entries[MAX_NUM_CACHE_ENTRIES];
 } CacheEntryHashMap;
 
 ////////////////////////////////////////////////////////////////////////////////

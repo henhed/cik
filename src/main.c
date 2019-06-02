@@ -10,6 +10,8 @@
 #include "memory.h"
 #include "server.h"
 
+static void test_hash_map (void);
+
 int
 main (int argc, char **argv)
 {
@@ -19,22 +21,20 @@ main (int argc, char **argv)
   ////////////////////////////////////////
   // Sanity checks
   Request request;
-  printf ("[SET] Request is %lu Bytes {\n"
-          "  cik  = %lu at %lu\n"
-          "  op   = %lu at %lu\n"
-          "  klen = %lu at %lu\n"
-          "  tlen = %lu at %lu\n"
-          "  vlen = %lu at %lu\n"
-          "}\n",
-          sizeof (request),
-          sizeof (request.cik), offsetof (Request, cik),
-          sizeof (request.op),  offsetof (Request, op),
-          sizeof (request.s.klen),  offsetof (Request, s.klen),
-          sizeof (request.s.tlen),  offsetof (Request, s.tlen),
-          sizeof (request.s.vlen),  offsetof (Request, s.vlen)
-          );
-  assert (sizeof (request) == 16);
+  assert (sizeof (request.cik)       == 3);
+  assert (offsetof (Request, cik)    == 0);
+  assert (sizeof (request.op)        == 1);
+  assert (offsetof (Request, op)     == 3);
+  assert (sizeof (request.s.klen)    == 1);
+  assert (offsetof (Request, s.klen) == 4);
+  assert (sizeof (request.s.tlen)    == 3);
+  assert (offsetof (Request, s.tlen) == 5);
+  assert (sizeof (request.s.vlen)    == 4);
+  assert (offsetof (Request, s.vlen) == 8);
+  assert (sizeof (request)           == 16);
 
+  ////////////////////////////////////////
+  // Init
   printf ("Starting server on port %u\n", SERVER_PORT);
   if (0 != start_server ())
     {
@@ -48,52 +48,9 @@ main (int argc, char **argv)
   ////////////////////////////////////////
   // ... Profit
   init_cache_entry_map (entry_map);
+  test_hash_map (); // @Temporary
 
-  {
-    CacheEntry *entry = NULL;
-
-    char mykey0[] = "mykey0";
-    char myval0[] = "myval0";
-    char mykey1[] = "mykey1";
-    char myval1[] = "myval1";
-    char mykey2[] = "mykey2";
-    char myval2[] = "myval2";
-
-    set_cache_entry (entry_map,
-                     (u8 *) mykey0, strlen (mykey0),
-                     (u8 *) myval0, strlen (myval0));
-    set_cache_entry (entry_map,
-                     (u8 *) mykey1, strlen (mykey1),
-                     (u8 *) myval1, strlen (myval1));
-    set_cache_entry (entry_map,
-                     (u8 *) mykey2, strlen (mykey2),
-                     (u8 *) myval2, strlen (myval2));
-    set_cache_entry (entry_map,
-                     (u8 *) mykey1, strlen (mykey1),
-                     (u8 *) myval1, strlen (myval1));
-
-    entry = lock_and_get_cache_entry (entry_map, (u8 *) "mykey", strlen ("mykey"));
-    assert (entry == NULL);
-    entry = lock_and_get_cache_entry (entry_map, (u8 *) "mykey1", strlen ("mykey1"));
-    assert (entry != NULL);
-    assert (atomic_flag_test_and_set (&entry->guard));
-
-    {
-      u8 key[entry->key.nmemb + 1];
-      u8 val[entry->value.nmemb + 1];
-      memcpy (key, entry->key.base, entry->key.nmemb);
-      memcpy (val, entry->value.base, entry->value.nmemb);
-      key[entry->key.nmemb] = '\0';
-      val[entry->value.nmemb] = '\0';
-      printf ("GOT \"%s\" => \"%s\"\n", key, val);
-    }
-
-    UNLOCK_ENTRY (entry);
-    assert (!atomic_flag_test_and_set (&entry->guard));
-    UNLOCK_ENTRY (entry);
-  }
-
-  for (s32 countdown = 10; countdown > 0;)
+  for (s32 countdown = 4; countdown > 0;)
     {
       int handled_requests;
       server_accept ();
@@ -113,4 +70,61 @@ main (int argc, char **argv)
   release_memory ();
 
   return EXIT_SUCCESS;
+}
+
+static void
+test_hash_map ()
+{
+  CacheKey   mykey0 = {(u8 *) "mykey0", strlen ("mykey0")};
+  CacheValue myval0 = {(u8 *) "myval0", strlen ("myval0")};
+  CacheKey   mykey1 = {(u8 *) "mykey1", strlen ("mykey1")};
+  CacheValue myval1 = {(u8 *) "myval1", strlen ("myval1")};
+
+  CacheEntry *entry0, *old_entry;
+  entry0 = reserve_and_lock (mykey0.nmemb + myval0.nmemb);
+  entry0->key = mykey0; // !! Not pointing to reserved memory
+  entry0->value = myval0; // !! Not pointing to reserved memory
+  old_entry = NULL;
+  set_locked_cache_entry (entry_map, entry0, &old_entry);
+  UNLOCK_ENTRY (entry0);
+  assert (old_entry == NULL);
+
+  CacheEntry *entry1;
+  entry1 = reserve_and_lock (mykey0.nmemb + myval0.nmemb);
+  entry1->key = mykey0; // !! Not pointing to reserved memory
+  entry1->value = myval0; // !! Not pointing to reserved memory
+  old_entry = NULL;
+  set_locked_cache_entry (entry_map, entry1, &old_entry);
+  UNLOCK_ENTRY (entry1);
+  assert (old_entry == entry0);
+  UNLOCK_ENTRY (old_entry);
+
+  old_entry = NULL;
+  LOCK_ENTRY (entry1);
+  set_locked_cache_entry (entry_map, entry1, &old_entry);
+  UNLOCK_ENTRY (entry1);
+  assert (old_entry == NULL);
+
+  CacheEntry *entry2;
+  entry2 = reserve_and_lock (mykey1.nmemb + myval1.nmemb);
+  entry2->key = mykey1; // !! Not pointing to reserved memory
+  entry2->value = myval1; // !! Not pointing to reserved memory
+  set_locked_cache_entry (entry_map, entry2, NULL);
+  UNLOCK_ENTRY (entry2);
+
+  CacheEntry *entry3;
+  entry3 = lock_and_get_cache_entry (entry_map, mykey1);
+  assert (entry3 == entry2);
+  assert (atomic_flag_test_and_set (&entry3->guard));
+  UNLOCK_ENTRY (entry3);
+  assert (!atomic_flag_test_and_set (&entry3->guard));
+  UNLOCK_ENTRY (entry3);
+  // Try to get same entry again to test internal slot locking
+  entry3 = lock_and_get_cache_entry (entry_map, mykey1);
+  UNLOCK_ENTRY (entry3);
+
+  CacheEntry *entry4;
+  CacheKey newkey = {(u8 *) "marklar", strlen ("marklar")};
+  entry4 = lock_and_get_cache_entry (entry_map, newkey);
+  assert (entry4 == NULL);
 }

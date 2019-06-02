@@ -8,6 +8,9 @@
 # include <stdio.h>
 #endif
 
+#define LOCK_SLOT(m, s) do {} while (atomic_flag_test_and_set (&(map)->guards[slot]))
+#define UNLOCK_SLOT(m, s) atomic_flag_clear (&(m)->guards[slot])
+
 static inline u32
 get_hash (const u8 *base, u32 nmemb)
 {
@@ -15,6 +18,12 @@ get_hash (const u8 *base, u32 nmemb)
   for (; nmemb > 0; --nmemb)
     hash = ((hash << 5) + hash) ^ *(base++);
   return hash;
+}
+
+static inline u32
+get_key_hash (CacheKey key)
+{
+  return get_hash (key.base, key.nmemb);
 }
 
 void
@@ -29,40 +38,53 @@ init_cache_entry_map (CacheEntryHashMap *map)
   for (u32 i = 0; i < MAX_NUM_CACHE_ENTRIES; ++i)
     {
       map->mask[i] = false;
+      map->guards[i] = (atomic_flag) ATOMIC_FLAG_INIT;
       map->hashes[i] = 0;
-      map->entries[i] = CACHE_ENTRY_INIT;
+      map->entries[i] = NULL;
     }
 }
 
+// @Note: Segfaults if any key base ptr is NULL
+#define CMP_KEYS(a, b)                                  \
+  ((a.nmemb == b.nmemb)                                 \
+   && ((a.base == b.base)                               \
+       || (0 == memcmp (a.base, b.base, a.nmemb))))
+
+// @Note: Evaluates to false if both entries are NULL
+#define CMP_ENTRY_KEYS(a, b) (((a) && (b)) && CMP_KEYS((a)->key, (b)->key))
+
 CacheEntry *
-lock_and_get_cache_entry (CacheEntryHashMap *map, u8 *k, u32 klen)
+lock_and_get_cache_entry (CacheEntryHashMap *map, CacheKey key)
 {
   u32 hash, slot, pos;
 
 #if DEBUG
   assert (map);
-  assert (k);
-  assert (klen > 0);
+  assert (key.base);
+  assert (key.nmemb > 0);
 #endif
 
-  hash = get_hash (k, klen);
+  hash = get_key_hash (key);
   slot = hash % MAX_NUM_CACHE_ENTRIES;
   pos  = slot;
 
   do
     {
-      LOCK_ENTRY (&map->entries[pos]);
+      LOCK_SLOT (map, pos);
       if (map->mask[pos])
         {
-          if ((map->hashes[pos] == hash)
-              && (map->entries[pos].key.nmemb == klen)
-              && ((map->entries[pos].key.base == k) ||
-                  (0 == memcmp (map->entries[pos].key.base, k, klen))))
+          if (map->hashes[pos] == hash)
             {
-              return &map->entries[pos]; // Caller is now responsible for guard
+              LOCK_ENTRY (map->entries[pos]);
+              if (CMP_KEYS (map->entries[pos]->key, key))
+                {
+                  UNLOCK_SLOT (map, pos);
+                  return map->entries[pos]; // Caller now owns entry lock
+                }
+              UNLOCK_ENTRY (map->entries[pos]);
             }
         }
-      UNLOCK_ENTRY (&map->entries[pos]);
+      UNLOCK_SLOT (map, pos);
       ++pos;
       if (pos >= MAX_NUM_CACHE_ENTRIES)
         pos = 0;
@@ -73,17 +95,18 @@ lock_and_get_cache_entry (CacheEntryHashMap *map, u8 *k, u32 klen)
 }
 
 bool
-set_cache_entry (CacheEntryHashMap *map, u8 *k, u32 klen, u8 *v, u32 vlen)
+set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
+                        CacheEntry **old_entry)
 {
   bool found = false;
   u32 hash, slot, pos;
 
 #if DEBUG
   assert (map);
-  assert (k);
-  assert (klen > 0);
-  assert (v);
-  assert (vlen > 0);
+  assert (entry->key.base);
+  assert (entry->key.nmemb > 0);
+  assert (entry->value.base);
+  assert (entry->value.nmemb > 0);
 #endif
 
   if (atomic_load (&map->nmemb) >= MAX_NUM_CACHE_ENTRIES)
@@ -94,30 +117,52 @@ set_cache_entry (CacheEntryHashMap *map, u8 *k, u32 klen, u8 *v, u32 vlen)
       return false;
     }
 
-  hash = get_hash (k, klen);
+  hash = get_key_hash (entry->key);
   slot = hash % MAX_NUM_CACHE_ENTRIES;
   pos  = slot;
 
   do
     {
-      LOCK_ENTRY (&map->entries[pos]);
+      LOCK_SLOT (map, pos);
       if (map->mask[pos])
         {
-          if ((map->hashes[pos] == hash)
-              && (map->entries[pos].key.nmemb == klen)
-              && ((map->entries[pos].key.base == k) ||
-                  (0 == memcmp (map->entries[pos].key.base, k, klen))))
+          if (map->hashes[pos] == hash)
             {
+              CacheEntry *occupant = map->entries[pos];
 #if DEBUG
-              u8 str[klen + 1];
-              memcpy (str, k, klen);
-              str[klen] = '\0';
-              printf ("OVERWRITING \"%s\"\n", str);
+              assert (occupant != NULL);
 #endif
-              found = true;
-              break; // entry flag is still set
+              if (occupant == entry)
+                {
+#if DEBUG
+                  printf ("ALREADY SET \"%.*s\"\n", entry->key.nmemb, entry->key.base);
+#endif
+                  UNLOCK_SLOT (map, pos);
+                  return true;
+                }
+
+              LOCK_ENTRY (occupant);
+              if (CMP_ENTRY_KEYS (occupant, entry))
+                {
+#if DEBUG
+                  printf ("OVERWRITING \"%.*s\"\n", entry->key.nmemb, entry->key.base);
+#endif
+                  if (old_entry != NULL)
+                    {
+#if DEBUG
+                      assert (*old_entry != entry);
+#endif
+                      // If caller wants the old entry they are responsible for unlocking
+                      *old_entry = occupant;
+                    }
+                  else
+                    UNLOCK_ENTRY (occupant);
+                  found = true;
+                  break; // slot is still locked
+                }
+              UNLOCK_ENTRY (occupant);
             }
-          UNLOCK_ENTRY (&map->entries[pos]);
+          UNLOCK_SLOT (map, pos);
           ++pos;
           if (pos >= MAX_NUM_CACHE_ENTRIES)
             pos = 0;
@@ -126,7 +171,7 @@ set_cache_entry (CacheEntryHashMap *map, u8 *k, u32 klen, u8 *v, u32 vlen)
         {
           found = true;
           atomic_fetch_add (&map->nmemb, 1);
-          break; // entry flag is still set
+          break; // slot is still locked
         }
     }
   while (pos != slot);
@@ -141,11 +186,8 @@ set_cache_entry (CacheEntryHashMap *map, u8 *k, u32 klen, u8 *v, u32 vlen)
 
   map->mask[pos] = true;
   map->hashes[pos] = hash;
-  map->entries[pos].key.base = k;
-  map->entries[pos].key.nmemb = klen;
-  map->entries[pos].value.base = v;
-  map->entries[pos].value.nmemb = vlen;
-  UNLOCK_ENTRY (&map->entries[pos]);
+  map->entries[pos] = entry;
+  UNLOCK_SLOT (map, pos);
 
   return true;
 }
@@ -155,14 +197,13 @@ debug_print_entry (CacheEntry *entry)
 {
   bool expires = (entry->expiry != CACHE_EXPIRY_INIT);
   printf ("%s: Content is: {\n"
-          " TTL: %ld\n"
+          " TTL: %ld, WASTE: %u\n"
           " KEY: \"%.*s\"\n"
-          " TAG: \"%.*s\"\n"
-          " TAG: \"%.*s\"\n"
-          " TAG: \"%.*s\"\n"
+          " TAGS: [\"%.*s\", \"%.*s\", \"%.*s\"]\n"
           " VAL: \"%.*s\"\n}\n",
           __FUNCTION__,
           expires ? (entry->expiry - time (NULL)) : -1,
+          entry->waste,
           entry->key.nmemb,     entry->key.base,
           entry->tags[0].nmemb, entry->tags[0].base,
           entry->tags[1].nmemb, entry->tags[1].base,

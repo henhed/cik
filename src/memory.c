@@ -108,6 +108,7 @@ reserve_and_lock (size_t payload_size)
           entry = (CacheEntry *) memory;
           *entry = CACHE_ENTRY_INIT;
           LOCK_ENTRY (entry);
+          entry->waste = bucket->size - total_size;
           ++bucket->nmemb;
           break;
         }
