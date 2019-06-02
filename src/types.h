@@ -62,6 +62,15 @@ typedef struct
 // PROTOCOL
 //
 
+// GET
+// char[3]      0               'CiK' (Sanity)
+// char         3               'g'   (OP code)
+// u8           4               Key length
+// u8           5               Flags
+// u8[10]       6               Padding
+// ..data       16              (key)
+
+// SET
 // char[3]      0               'CiK' (Sanity)
 // char         3               's'   (OP code)
 // u8           4               Key length
@@ -75,9 +84,13 @@ typedef struct
 #define CONTROL_BYTE_1 0x43 // 'C'
 #define CONTROL_BYTE_2 0x69 // 'i'
 #define CONTROL_BYTE_3 0x4B // 'K'
+#define CMD_BYTE_GET   0x67 // 'g'
 #define CMD_BYTE_SET   0x73 // 's'
 #define SUCCESS_BYTE   0x74 // 't'
 #define FAILURE_BYTE   0x66 // 'f'
+
+#define GET_FLAG_NONE          0x00
+#define GET_FLAG_IGNORE_EXPIRY 0x01
 
 typedef struct __attribute__((packed))
 {
@@ -85,6 +98,12 @@ typedef struct __attribute__((packed))
   s8 op;
   union __attribute__((packed))
   {
+    struct __attribute__((packed))
+    {
+      u8 klen;
+      u8 flags;
+      u8 _padding[10];
+    } g;
     struct __attribute__((packed))
     {
       u8 klen;

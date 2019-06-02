@@ -26,17 +26,23 @@ main (int argc, char **argv)
   // Sanity checks
   {
     Request request;
-    assert (sizeof (request)           == 16);
-    assert (sizeof (request.cik)       == 3);
-    assert (sizeof (request.op)        == 1);
-    assert (sizeof (request.s.klen)    == 1);
-    assert (sizeof (request.s.tlen)    == 3);
-    assert (sizeof (request.s.vlen)    == 4);
-    assert (offsetof (Request, cik)    == 0);
-    assert (offsetof (Request, op)     == 3);
-    assert (offsetof (Request, s.klen) == 4);
-    assert (offsetof (Request, s.tlen) == 5);
-    assert (offsetof (Request, s.vlen) == 8);
+    assert (sizeof (request)               == 16);
+    assert (sizeof (request.cik)           == 3);
+    assert (sizeof (request.op)            == 1);
+    assert (sizeof (request.g.klen)        == 1);
+    assert (sizeof (request.g.flags)       == 1);
+    assert (sizeof (request.g._padding)    == 10);
+    assert (sizeof (request.s.klen)        == 1);
+    assert (sizeof (request.s.tlen)        == 3);
+    assert (sizeof (request.s.vlen)        == 4);
+    assert (offsetof (Request, cik)        == 0);
+    assert (offsetof (Request, op)         == 3);
+    assert (offsetof (Request, g.klen)     == 4);
+    assert (offsetof (Request, g.flags)    == 5);
+    assert (offsetof (Request, g._padding) == 6);
+    assert (offsetof (Request, s.klen)     == 4);
+    assert (offsetof (Request, s.tlen)     == 5);
+    assert (offsetof (Request, s.vlen)     == 8);
 
     Response response;
     assert (sizeof (response)                 == 8);
@@ -48,6 +54,9 @@ main (int argc, char **argv)
     assert (offsetof (Response, status)       == 3);
     assert (offsetof (Response, payload_size) == 4);
     assert (offsetof (Response, error_code)   == 4);
+
+    // We use errno codes in responses, don't know how platform specific these are!
+    assert (ENODATA == 61);
   }
 
   ////////////////////////////////////////

@@ -23,6 +23,7 @@ typedef struct
   struct sockaddr_in addr;
   socklen_t addrlen;
   Response response;
+  CacheEntry *response_entry; // @Temporary! We need output buffer per client
 } Client;
 
 static Server server = { 0 };
@@ -107,6 +108,54 @@ server_accept ()
     }
 
   debug_print_client (client);
+
+  return 0;
+}
+
+static int
+handle_get_request (Client *client, Request *request)
+{
+  CacheEntry *entry = NULL;
+
+  u8 klen  = request->g.klen;
+  u8 flags = request->g.flags;
+
+  CacheKey key;
+  ssize_t nread;
+  u8 tmp_key_data[0xFF];
+
+  // Read key
+  nread = read (client->fd, tmp_key_data, klen);
+  if (nread < 0)
+    return errno;
+  if (nread != klen)
+    return EINVAL;
+
+  key.base = tmp_key_data;
+  key.nmemb = klen;
+
+  entry = lock_and_get_cache_entry (entry_map, key);
+  if (!entry)
+    return ENODATA;
+
+  if (~flags & GET_FLAG_IGNORE_EXPIRY)
+    {
+      if (entry->expiry != CACHE_EXPIRY_INIT)
+        {
+          time_t now = time (NULL);
+          if (entry->expiry < now)
+            {
+              UNLOCK_ENTRY (entry);
+              return ENODATA; // @Revisit: Use different code for expired entry?
+            }
+        }
+    }
+
+  // @Temporary! Don't know what to do about outbut buffer allocation yet.
+  // We should copy the entry value here, store it with the reponse and unlock the entry.
+  client->response_entry = entry;
+
+  UNLOCK_ENTRY (entry);
 
   return 0;
 }
@@ -207,14 +256,17 @@ handle_request (Client *client, Request *request)
       || (request->cik[2] != CONTROL_BYTE_3))
     return EINVAL;
 
-  if (request->op == CMD_BYTE_SET)
+  switch (request->op)
     {
+    case CMD_BYTE_GET:
+      return handle_get_request (client, request);
+    case CMD_BYTE_SET:
       request->s.vlen = ntohl (request->s.vlen);
       request->s.ttl  = ntohl (request->s.ttl);
       return handle_set_request (client, request);
+    default:
+      return ENOSYS;
     }
-
-  return ENOSYS;
 }
 
 int
@@ -238,6 +290,7 @@ server_read ()
           Client *client = event->data.ptr;
           Request request = { 0 };
           ssize_t nread;
+          int err;
 
           if (client->response.cik[0] != 0x00)
             continue; // This client has a pending response
@@ -261,14 +314,15 @@ server_read ()
               close_client (client);
               continue;
             }
-          else if (0 > handle_request (client, &request))
+          else if (0 != (err = handle_request (client, &request)))
             {
-              fprintf (stderr, "%s: Invalid request (FD %d).\n",
-                       __FUNCTION__, client->fd);
-              // @Revisit: Thread safety. What happens if we have a thread
-              // working on a response? Also, how to respond to client?
-              close_client (client);
-              continue;
+              u32 error_code = err < 0 ? -err : err;
+              client->response.cik[0] = CONTROL_BYTE_1;
+              client->response.cik[1] = CONTROL_BYTE_2;
+              client->response.cik[2] = CONTROL_BYTE_3;
+              client->response.status = FAILURE_BYTE;
+              client->response.error_code = htonl (error_code);
+              ++nrequests;
             }
           else
             {
@@ -276,7 +330,16 @@ server_read ()
               client->response.cik[1] = CONTROL_BYTE_2;
               client->response.cik[2] = CONTROL_BYTE_3;
               client->response.status = SUCCESS_BYTE;
-              client->response.payload_size = htonl (0);
+              if (client->response_entry != NULL)
+                {
+                  // @Temporary!!
+                  CacheEntry *entry = client->response_entry;
+                  client->response.payload_size = htonl (entry->value.nmemb);
+                }
+              else
+                {
+                  client->response.payload_size = htonl (0);
+                }
               ++nrequests;
             }
         }
@@ -307,6 +370,14 @@ server_read ()
                        __FUNCTION__, nwritten, sizeof (client->response), client->fd);
               close_client (client);
               continue;
+            }
+
+          // @Temporary!!
+          if (client->response_entry)
+            {
+              CacheEntry *entry = client->response_entry;
+              nwritten = write (client->fd, entry->value.base, entry->value.nmemb);
+              client->response_entry = NULL;
             }
         }
 

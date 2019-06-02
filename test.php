@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Improove;
 
+ini_set('display_errors', '1');
+ini_set('error_reporting', (string) (E_ALL | E_STRICT));
+
 class CiK //implements Zend_Cache_Backend_Interface
 {
 
@@ -13,9 +16,28 @@ class CiK //implements Zend_Cache_Backend_Interface
     const CONTROL_BYTE_1 = 0x43; // 'C'
     const CONTROL_BYTE_2 = 0x69; // 'i'
     const CONTROL_BYTE_3 = 0x4B; // 'K'
+    const CMD_BYTE_GET   = 0x67; // 'g'
     const CMD_BYTE_SET   = 0x73; // 's'
+    /**#@-*/
+
+    /**#@+
+     * Response indicators
+     */
     const SUCCESS_BYTE   = 0x74; // 't'
     const FAILURE_BYTE   = 0x66; // 'f'
+    /**#@-*/
+
+    /**#@+
+     * Flags
+     */
+    const FLAG_NONE          = 0x00;
+    const FLAG_IGNORE_EXPIRY = 0x01;
+    /**#@-*/
+
+    /**#@+
+     * Error codes
+     */
+    const ENODATA = 0x3D;
     /**#@-*/
 
     /** @var resource */
@@ -36,19 +58,32 @@ class CiK //implements Zend_Cache_Backend_Interface
 
     public function __destruct()
     {
-        @fclose($this->fd);
+        if ($this->fd) {
+            @fclose($this->fd);
+        }
     }
 
     public function setDirectives(array $directives): void
     {
     }
 
-    public function load(string $id, bool $doNotTestCacheValidity = false): ?string
+    public function load(string $id, bool $doNotTestCacheValidity = false)
     {
-        return false;
+        $message = $this->makeGetMessage($id, $doNotTestCacheValidity);
+        if (!$this->writeMessage($message)) {
+            return false;
+        }
+        try {
+            return $this->readMessage();
+        } catch (\Exception $e) {
+            if ($e->getCode() == self::ENODATA) {
+                return false;
+            }
+            throw $e;
+        }
     }
 
-    public function test(string $id): ?int
+    public function test(string $id)
     {
         return false;
     }
@@ -79,6 +114,29 @@ class CiK //implements Zend_Cache_Backend_Interface
     public function clean(string $mode = 'all', array $tags = []): bool
     {
         return false;
+    }
+
+    private function makeGetMessage(string $key, bool $ignoreExpiry): string
+    {
+        // :GET
+        // Size         Offset          Value
+        // char[3]      0               'CiK' (Sanity)
+        // char         3               'g'   (OP code)
+        // u8           4               Key length
+        // u8           5               Flags
+        // u8[10]       6               Padding
+        // void *       16              (key)
+        $klen = strlen($key);
+        $head = pack(
+            'c3cCC@16',
+            self::CONTROL_BYTE_1,
+            self::CONTROL_BYTE_2,
+            self::CONTROL_BYTE_3,
+            self::CMD_BYTE_GET,
+            $klen,
+            $ignoreExpiry ? self::FLAG_IGNORE_EXPIRY : self::FLAG_NONE
+        );
+        return $head . $key;
     }
 
     private function makeSetMessage(
@@ -186,8 +244,16 @@ try {
     $key = 'min nyckel';
     $val = sprintf('My PID is %d', getmypid());
     $tags = ['min första tagg', 'min andra tagg', 'etc..'];
-    $success = $cik->save($val, $key, $tags, 1337);
+    $success = $cik->save($val, $key, $tags, 10);
     var_dump($success);
+
+    $value = $cik->load($key);
+    var_dump($value);
+    $value = $cik->load($key, true);
+    var_dump($value);
+    $value = $cik->load('marklar');
+    var_dump($value);
+
     // Store a smaller value. This should reuse the same entry slot internally.
     $success = $cik->save('...', $key, $tags, 10);
     var_dump($success);
