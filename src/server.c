@@ -5,6 +5,7 @@
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <threads.h>
 #include <unistd.h>
 
 #include "server.h"
@@ -28,40 +29,13 @@ typedef struct
   int fd;
   struct sockaddr_in addr;
   socklen_t addrlen;
-  CacheEntry *response_entry; // @Temporary! We need output buffer per client
 } Client;
 
-typedef enum
+typedef struct
 {
-  // 0x00 Series: Generates a sucess response
-  STATUS_OK                     = 0x00,
-
-  // 0x10 Series: Errors that close the client connection
-  MASK_INTERNAL_ERROR           = 0x10,
-  STATUS_BUG                    = 0x11,
-  STATUS_CONNECTION_CLOSED      = 0x12,
-  STATUS_NETWORK_ERROR          = 0x13,
-
-  // 0x20 Series: Errors that generate a failure response
-  MASK_CLIENT_ERROR             = 0x20,
-  STATUS_PROTOCOL_ERROR         = 0x21,
-
-  // 0x40 Series: Non-errors that generate a failure response
-  MASK_CLIENT_MESSAGE           = 0x40,
-  STATUS_NOT_FOUND              = 0x41,
-  STATUS_EXPIRED                = 0x42,
-  STATUS_OUT_OF_MEMORY          = 0x43
-} StatusCode;
-
-static const char *status_code_names[] = {
-  [STATUS_OK]                = "OK",
-  [STATUS_BUG]               = "BUG!",
-  [STATUS_CONNECTION_CLOSED] = "Connection closed",
-  [STATUS_NETWORK_ERROR]     = "Network error",
-  [STATUS_PROTOCOL_ERROR]    = "Protocol error",
-  [STATUS_NOT_FOUND]         = "Not found",
-  [STATUS_OUT_OF_MEMORY]     = "Out of memory"
-};
+  u8 *base;
+  u32 nmemb;
+} Payload;
 
 static Server server = { 0 };
 static Client clients[MAX_NUM_CLIENTS] = {{ 0 }};
@@ -86,7 +60,7 @@ start_server ()
 
   int on = 1;
   if (0 > setsockopt (server.fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof (on)))
-    printf ("Could not enable TCP_NODELAY: %s\n", strerror (errno));
+    fprintf (stderr, "Could not enable TCP_NODELAY: %s\n", strerror (errno));
 
   server.epfd = epoll_create (MAX_NUM_CLIENTS); // Size is actually ignored here
   if (server.epfd < 0)
@@ -162,26 +136,29 @@ server_accept ()
   return 0;
 }
 
+// @Revisit: Maybe static allocation is a bad idea here. Depends on the size
+// of MAX_BUCKET_SIZE I guess. Should maybe be handled by memory.c instead.
+static thread_local u8      payload_buffer[MAX_BUCKET_SIZE];
+static thread_local Payload the_payload = { 0 };
+
 static StatusCode
-handle_get_request (Client *client, Request *request)
+handle_get_request (Client *client, Request *request, Payload **response_payload)
 {
   PROFILE (PROF_HANDLE_GET_REQUEST);
 
+  StatusCode status;
   CacheEntry *entry = NULL;
 
   u8 klen  = request->g.klen;
   u8 flags = request->g.flags;
 
   CacheKey key;
-  ssize_t nread;
   u8 tmp_key_data[0xFF];
 
   // Read key
-  nread = read (client->fd, tmp_key_data, klen);
-  if (nread < 0)
-    return STATUS_NETWORK_ERROR;
-  if (nread != klen)
-    return STATUS_NETWORK_ERROR;
+  status = read_request_payload (client, tmp_key_data, klen);
+  if (status != STATUS_OK)
+    return status;
 
   key.base = tmp_key_data;
   key.nmemb = klen;
@@ -203,9 +180,12 @@ handle_get_request (Client *client, Request *request)
         }
     }
 
-  // @Temporary! Don't know what to do about outbut buffer allocation yet.
-  // We should copy the entry value here, store it with the reponse and unlock the entry.
-  client->response_entry = entry;
+  // We copy the entry value to a payload buffer so we don't have to keep
+  // the entity locked while writing it's data to the client.
+  the_payload.base = payload_buffer;
+  the_payload.nmemb = entry->value.nmemb;
+  memcpy (the_payload.base, entry->value.base, the_payload.nmemb);
+  *response_payload = &the_payload;
 
   UNLOCK_ENTRY (entry);
 
@@ -217,8 +197,7 @@ handle_set_request (Client *client, Request *request)
 {
   PROFILE (PROF_HANDLE_SET_REQUEST);
 
-  // @Incomplete: Read incoming payload from fd in worker thread?
-
+  StatusCode status;
   CacheEntry *entry = NULL, *old_entry = NULL;
 
   u8  klen  = request->s.klen;
@@ -228,23 +207,19 @@ handle_set_request (Client *client, Request *request)
   u32 vlen  = request->s.vlen;
   u32 ttl   = request->s.ttl;
 
-  ssize_t nread;
   u8     *payload;
   u8      tmp_key_data[0xFF];
   size_t  total_size = klen + tlen0 + tlen1 + tlen2 + vlen;
-  size_t  remaining_size = total_size;
 
   // Read key
-  nread = read (client->fd, tmp_key_data, klen);
-  if (nread < 0)
-    return STATUS_NETWORK_ERROR;
-  if (nread != klen)
-    return STATUS_NETWORK_ERROR;
-  remaining_size -= nread;
+  status = read_request_payload (client, tmp_key_data, klen);
+  if (status != STATUS_OK)
+    return status;
 
   // @Incomplete: Use key here and look if we have an existing entry
   // in the hash table already. If so, reuse it's memory if possible.
   // Right now we're always reserving new memory and releasing the old.
+  // But who knows, maybe reserving new memory will be faster in the end.
 
   entry = reserve_and_lock (total_size);
   if (entry == NULL)
@@ -258,18 +233,12 @@ handle_set_request (Client *client, Request *request)
   entry->key.nmemb = klen;
   payload += klen;
 
-  do
+  status = read_request_payload (client, payload, total_size - klen);
+  if (status != STATUS_OK)
     {
-      u8 *buffer = payload + (total_size - klen) - remaining_size;
-      nread = read (client->fd, buffer, remaining_size);
-      if (nread < 0)
-        {
-          UNLOCK_ENTRY (entry);
-          return STATUS_NETWORK_ERROR;
-        }
-      remaining_size -= nread;
+      UNLOCK_ENTRY (entry);
+      return status;
     }
-  while (remaining_size > 0);
 
   entry->tags[0].base  = entry->key.base + klen;
   entry->tags[0].nmemb = tlen0;
@@ -298,11 +267,11 @@ handle_set_request (Client *client, Request *request)
 }
 
 static StatusCode
-handle_request (Client *client, Request *request)
+handle_request (Client *client, Request *request, Payload **response_payload)
 {
   PROFILE (PROF_HANDLE_REQUEST);
 
-  if (!client || !request)
+  if (!client || !request || !response_payload)
     return STATUS_BUG;
 
   if ((request->cik[0] != CONTROL_BYTE_1)
@@ -310,10 +279,12 @@ handle_request (Client *client, Request *request)
       || (request->cik[2] != CONTROL_BYTE_3))
     return STATUS_PROTOCOL_ERROR;
 
+  *response_payload = NULL;
+
   switch (request->op)
     {
     case CMD_BYTE_GET:
-      return handle_get_request (client, request);
+      return handle_get_request (client, request, response_payload);
     case CMD_BYTE_SET:
       request->s.vlen = ntohl (request->s.vlen);
       request->s.ttl  = ntohl (request->s.ttl);
@@ -340,11 +311,24 @@ server_read ()
   for (int i = 0; i < nevents; ++i)
     {
       struct epoll_event *event = &events[i];
+
+      if (event->events & (EPOLLERR | EPOLLHUP))
+        {
+          Client *client = event->data.ptr;
+          close_client (client);
+#if DEBUG
+          fprintf (stderr, "%s: Got error event: 0x%X\n",
+                   __FUNCTION__, event->events);
+#endif
+          continue;
+        }
+
       if ((event->events & (EPOLLIN | EPOLLOUT)) == (EPOLLIN | EPOLLOUT))
         {
           Client *client = event->data.ptr;
           Request request = { 0 };
           Response response = { 0 };
+          Payload *payload = NULL;
           StatusCode status;
 
           errno = 0;
@@ -352,17 +336,17 @@ server_read ()
           if (status & MASK_INTERNAL_ERROR)
             {
               fprintf (stderr, "%s: (FD %d) %s [%s]\n", __FUNCTION__,
-                       client->fd, status_code_names[status], strerror (errno));
+                       client->fd, get_status_code_name (status), strerror (errno));
               close_client (client);
               continue;
             }
 
           errno = 0;
-          status = handle_request (client, &request);
+          status = handle_request (client, &request, &payload);
           if (status & MASK_INTERNAL_ERROR)
             {
               fprintf (stderr, "%s: (FD %d) %s [%s]\n", __FUNCTION__,
-                       client->fd, status_code_names[status], strerror (errno));
+                       client->fd, get_status_code_name (status), strerror (errno));
               close_client (client);
               continue;
             }
@@ -375,9 +359,7 @@ server_read ()
 #if DEBUG
               assert (status == STATUS_OK);
 #endif
-              u32 size = 0;
-              if (client->response_entry != NULL)
-                size = client->response_entry->value.nmemb; // @Temporary!!
+              u32 size = (payload == NULL) ? 0 : payload->nmemb;
               response = MAKE_SUCCESS_RESPONSE (size);
             }
 
@@ -386,31 +368,22 @@ server_read ()
           if (status & MASK_INTERNAL_ERROR)
             {
               fprintf (stderr, "%s: (FD %d) %s [%s]\n", __FUNCTION__,
-                       client->fd, status_code_names[status], strerror (errno));
+                       client->fd, get_status_code_name (status), strerror (errno));
               close_client (client);
               continue;
             }
 
-          // @Temporary!!
-          if (client->response_entry)
+          if (payload != NULL)
             {
-              CacheEntry *entry = client->response_entry;
-              status = write_response_payload (client,
-                                               entry->value.base,
-                                               entry->value.nmemb);
-              client->response_entry = NULL;
+              status = write_response_payload (client, payload->base, payload->nmemb);
+              if (status & MASK_INTERNAL_ERROR)
+                {
+                  fprintf (stderr, "%s: (FD %d) %s [%s]\n", __FUNCTION__,
+                           client->fd, get_status_code_name (status), strerror (errno));
+                  close_client (client);
+                  continue;
+                }
             }
-        }
-
-      if (event->events & (EPOLLERR | EPOLLHUP))
-        {
-          Client *client = event->data.ptr;
-          close_client (client);
-#if DEBUG
-          fprintf (stderr, "%s: Got error event: 0x%X\n",
-                   __FUNCTION__, event->events);
-#endif
-          continue;
         }
     }
 

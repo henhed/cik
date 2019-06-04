@@ -60,6 +60,48 @@ typedef struct
   CacheEntry *entries[MAX_NUM_CACHE_ENTRIES];
 } CacheEntryHashMap;
 
+typedef enum
+{
+  // 0x00 Series: Generates a sucess response
+  STATUS_OK                     = 0x00,
+
+  // 0x10 Series: Errors that close the client connection
+  MASK_INTERNAL_ERROR           = 0x10,
+  STATUS_BUG                    = 0x11,
+  STATUS_CONNECTION_CLOSED      = 0x12,
+  STATUS_NETWORK_ERROR          = 0x13,
+
+  // 0x20 Series: Errors that generate a failure response
+  MASK_CLIENT_ERROR             = 0x20,
+  STATUS_PROTOCOL_ERROR         = 0x21,
+
+  // 0x40 Series: Non-errors that generate a failure response
+  MASK_CLIENT_MESSAGE           = 0x40,
+  STATUS_NOT_FOUND              = 0x41,
+  STATUS_EXPIRED                = 0x42,
+  STATUS_OUT_OF_MEMORY          = 0x43
+} StatusCode;
+
+static inline const char *
+get_status_code_name (StatusCode code)
+{
+  switch (code)
+    {
+    case STATUS_OK:                 return "OK";
+    case MASK_INTERNAL_ERROR:       return "[MASK_INTERNAL_ERROR]";
+    case STATUS_BUG:                return "BUG!";
+    case STATUS_CONNECTION_CLOSED:  return "Connection closed";
+    case STATUS_NETWORK_ERROR:      return "Network error";
+    case MASK_CLIENT_ERROR:         return "[MASK_CLIENT_ERROR]";
+    case STATUS_PROTOCOL_ERROR:     return "Protocol error";
+    case MASK_CLIENT_MESSAGE:       return "[MASK_CLIENT_MESSAGE]";
+    case STATUS_NOT_FOUND:          return "Not found";
+    case STATUS_EXPIRED:            return "Expired";
+    case STATUS_OUT_OF_MEMORY:      return "Out of memory";
+    default:                        return "Unknown";
+    }
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // PROTOCOL
 //
