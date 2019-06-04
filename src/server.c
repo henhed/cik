@@ -1,14 +1,16 @@
-#include <errno.h>
-#include <sys/epoll.h>
-#include <sys/socket.h>
 #include <arpa/inet.h>
-#include <unistd.h>
+#include <errno.h>
+#include <netinet/tcp.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/epoll.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 #include "server.h"
 #include "memory.h"
 #include "entry.h"
+#include "profiler.h"
 
 typedef struct
 {
@@ -36,9 +38,16 @@ static void debug_print_client (Client *);
 int
 start_server ()
 {
+  for (u32 i = 0; i < MAX_NUM_CLIENTS; ++i)
+    clients[i].fd = -1;
+
   server.fd = socket (AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
   if (server.fd < 0)
     return errno;
+
+  int on = 1;
+  if (0 > setsockopt (server.fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof (on)))
+    printf ("Could not enable TCP_NODELAY: %s\n", strerror (errno));
 
   server.epfd = epoll_create (MAX_NUM_CLIENTS); // Size is actually ignored here
   if (server.epfd < 0)
@@ -71,6 +80,8 @@ start_server ()
 int
 server_accept ()
 {
+  PROFILE (PROF_SERVER_ACCEPT);
+
   Client *client = NULL;
   struct epoll_event event = { 0 };
 
@@ -115,6 +126,8 @@ server_accept ()
 static int
 handle_get_request (Client *client, Request *request)
 {
+  PROFILE (PROF_HANDLE_GET_REQUEST);
+
   CacheEntry *entry = NULL;
 
   u8 klen  = request->g.klen;
@@ -163,6 +176,8 @@ handle_get_request (Client *client, Request *request)
 static int
 handle_set_request (Client *client, Request *request)
 {
+  PROFILE (PROF_HANDLE_SET_REQUEST);
+
   // @Incomplete: Read incoming payload from fd in worker thread?
 
   CacheEntry *entry = NULL, *old_entry = NULL;
@@ -204,20 +219,18 @@ handle_set_request (Client *client, Request *request)
   entry->key.nmemb = klen;
   payload += klen;
 
-  nread = read (client->fd, payload, remaining_size);
-  if (nread < 0)
+  do
     {
-      UNLOCK_ENTRY (entry);
-      return errno;
+      u8 *buffer = payload + (total_size - klen) - remaining_size;
+      nread = read (client->fd, buffer, remaining_size);
+      if (nread < 0)
+        {
+          UNLOCK_ENTRY (entry);
+          return errno;
+        }
+      remaining_size -= nread;
     }
-  if ((size_t) nread != remaining_size)
-    {
-      UNLOCK_ENTRY (entry);
-      fprintf (stderr, "%s: Read %ld bytes, but expected %lu\n",
-               __FUNCTION__, nread, remaining_size);
-      return EINVAL;
-    }
-  remaining_size -= nread;
+  while (remaining_size > 0);
 
   entry->tags[0].base  = entry->key.base + klen;
   entry->tags[0].nmemb = tlen0;
@@ -248,6 +261,8 @@ handle_set_request (Client *client, Request *request)
 static int
 handle_request (Client *client, Request *request)
 {
+  PROFILE (PROF_HANDLE_REQUEST);
+
   if (!client || !request)
     return EINVAL;
 
@@ -272,6 +287,8 @@ handle_request (Client *client, Request *request)
 int
 server_read ()
 {
+  PROFILE (PROF_SERVER_READ);
+
   int nrequests = 0;
   struct epoll_event events[MAX_NUM_EVENTS] = {{ 0 }};
   int nevents = epoll_wait (server.epfd, events, MAX_NUM_EVENTS, 0);
@@ -347,27 +364,28 @@ server_read ()
       if (event->events & EPOLLOUT)
         {
           Client *client = event->data.ptr;
-          ssize_t nwritten;
+          ssize_t nsent;
 
           // @Incomplete: Response must have variable length.
 
           if (client->response.cik[0] == 0x00)
             continue; // This client has no pending response
 
-          nwritten = write (client->fd, &client->response, sizeof (client->response));
+          nsent = send (client->fd, &client->response, sizeof (client->response),
+                        MSG_NOSIGNAL);
           client->response.cik[0] = 0x00; // Invalidate response to accept new reads
 
-          if (nwritten < 0)
+          if (nsent < 0)
             {
               fprintf (stderr, "%s: Failed to write to FD %d: %s\n",
                        __FUNCTION__, client->fd, strerror (errno));
               close_client (client);
               continue;
             }
-          if (nwritten != sizeof (client->response))
+          if (nsent != sizeof (client->response))
             {
               fprintf (stderr, "%s: Wrote %ld but %lu was expected IF (%d)\n",
-                       __FUNCTION__, nwritten, sizeof (client->response), client->fd);
+                       __FUNCTION__, nsent, sizeof (client->response), client->fd);
               close_client (client);
               continue;
             }
@@ -376,7 +394,8 @@ server_read ()
           if (client->response_entry)
             {
               CacheEntry *entry = client->response_entry;
-              nwritten = write (client->fd, entry->value.base, entry->value.nmemb);
+              nsent = send (client->fd, entry->value.base, entry->value.nmemb,
+                            MSG_NOSIGNAL);
               client->response_entry = NULL;
             }
         }
@@ -408,6 +427,8 @@ stop_server ()
 static void
 close_client (Client *client)
 {
+  PROFILE (PROF_CLOSE_CLIENT);
+
   if (!client || (client->fd < 0))
     return;
   printf ("%s: ", __FUNCTION__);

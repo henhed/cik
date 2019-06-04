@@ -46,11 +46,19 @@ class CiK //implements Zend_Cache_Backend_Interface
     public function __construct()
     {
         $addr = 'tcp://127.0.0.1:5555';
-        $flags = STREAM_CLIENT_CONNECT;
-        $timeout = 2.5;
         $errno = 0;
         $errstr = '';
-        $this->fd = @stream_socket_client($addr, $errno, $errstr, $timeout, $flags);
+        $timeout = 2.5;
+        $flags = STREAM_CLIENT_CONNECT;
+        $context = stream_context_create(['socket' => ['tcp_nodelay' => true]]);
+        $this->fd = @stream_socket_client(
+            $addr,
+            $errno,
+            $errstr,
+            $timeout,
+            $flags,
+            $context
+        );
         if (!$this->fd) {
             throw new \Exception($errstr, $errno);
         }
@@ -116,6 +124,14 @@ class CiK //implements Zend_Cache_Backend_Interface
         return false;
     }
 
+    private function formatKey(string $key): string
+    {
+        if (strlen($key) > 0xFF) {
+            return sha1($key);
+        }
+        return $key;
+    }
+
     private function makeGetMessage(string $key, bool $ignoreExpiry): string
     {
         // :GET
@@ -126,6 +142,7 @@ class CiK //implements Zend_Cache_Backend_Interface
         // u8           5               Flags
         // u8[10]       6               Padding
         // void *       16              (key)
+        $key  = $this->formatKey($key);
         $klen = strlen($key);
         $head = pack(
             'c3cCC@16',
@@ -157,6 +174,7 @@ class CiK //implements Zend_Cache_Backend_Interface
         // u32          8               Value length
         // u32          12              TTL in seconds
         // void *       16              (key + tags + value)
+        $key  = $this->formatKey($key);
         $klen = strlen($key);
         $vlen = strlen($value);
         $tag0 = array_shift($tags);
@@ -224,23 +242,68 @@ class CiK //implements Zend_Cache_Backend_Interface
         if ($payloadSize === 0) {
             return '';
         }
-        $payload = fread($this->fd, $payloadSize);
-        if ($payload === false) {
-            throw new \Exception(sprintf(
-                'Failed to read CiK payload, header was: 0x%s',
-                strtoupper(bin2hex($header))
-            ));
-        }
+        $remainingSize = $payloadSize;
+        $payload = '';
+
+        do {
+            $chunk = fread($this->fd, $remainingSize);
+            if ($chunk === false) {
+                throw new \Exception(sprintf(
+                    'Failed to read CiK payload, header was: 0x%s',
+                    strtoupper(bin2hex($header))
+                ));
+            }
+            $payload .= $chunk;
+            $remainingSize -= strlen($chunk);
+        } while ($remainingSize > 0);
+
         return $payload;
     }
 }
 
 ($_SERVER['REQUEST_URI'] == '/favicon.ico') && die;
 
-header('Content-Type: text/plain');
+$saveTime = 0;
+$loadTime = 0;
 
 try {
     $cik = new CiK();
+
+    $totalSize = 0;
+    $message = 'It\'s going';
+    for ($i = 0; $i < 1000; ++$i) {
+        $key = 'Key is ' . $i;
+        $startTime = microtime(true);
+        $success = $cik->save($message, $key, [], 10);
+        $saveTime += microtime(true) - $startTime;
+        if (!$success) {
+            echo sprintf(
+                '<h1>%s</h1><dl><dt>%s</dt><dd>%s</dd></dl>',
+                'Save Failed',
+                $key,
+                $message
+            );
+        }
+        $startTime = microtime(true);
+        $check = $cik->load($key);
+        $loadTime += microtime(true) - $startTime;
+        if ($check !== $message) {
+            echo sprintf(
+                '<h1>%s</h1><dl><dt>%s</dt><dd>%s</dd><dt>%s</dt><dd>%s</dd></dl>',
+                'Load Failed',
+                'GOT',
+                $check,
+                'EXPECTED',
+                $message
+            );
+        }
+
+        $totalSize += strlen($key . $message);
+        $message .= ' and going';
+    }
+
+    var_dump('Total size ' . $totalSize);
+
     $key = 'min nyckel';
     $val = sprintf('My PID is %d', getmypid());
     $tags = ['min första tagg', 'min andra tagg', 'etc..'];
@@ -264,3 +327,5 @@ try {
 } catch (\Exception $e) {
     echo (string) $e;
 }
+
+echo sprintf('<h1>Save: %f</h1><h1>Load %f</h1>', $saveTime, $loadTime);

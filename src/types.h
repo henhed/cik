@@ -12,10 +12,12 @@
 typedef int8_t   s8;
 typedef int16_t s16;
 typedef int32_t s32;
+typedef int64_t s64;
 
 typedef uint8_t   u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
+typedef uint64_t u64;
 
 typedef _Atomic volatile u32 u32atom;
 
@@ -114,6 +116,25 @@ typedef struct __attribute__((packed))
   };
 } Request;
 
+#define IS_REQUEST_STRUCT_VALID(request)        \
+  ((sizeof (request) == 16)                     \
+   && (sizeof (request.cik) == 3)               \
+   && (sizeof (request.op) == 1)                \
+   && (sizeof (request.g.klen) == 1)            \
+   && (sizeof (request.g.flags) == 1)           \
+   && (sizeof (request.g._padding) == 10)       \
+   && (sizeof (request.s.klen) == 1)            \
+   && (sizeof (request.s.tlen) == 3)            \
+   && (sizeof (request.s.vlen) == 4)            \
+   && (offsetof (Request, cik) == 0)            \
+   && (offsetof (Request, op) == 3)             \
+   && (offsetof (Request, g.klen) == 4)         \
+   && (offsetof (Request, g.flags) == 5)        \
+   && (offsetof (Request, g._padding) == 6)     \
+   && (offsetof (Request, s.klen) == 4)         \
+   && (offsetof (Request, s.tlen) == 5)         \
+   && (offsetof (Request, s.vlen) == 8))
+
 typedef struct __attribute__((packed))
 {
   s8 cik[3]; // Always ASCII 'CiK'
@@ -124,5 +145,17 @@ typedef struct __attribute__((packed))
     u32 error_code;   // Error code if status = f
   };
 } Response;
+
+#define IS_RESPONSE_STRUCT_VALID(response)      \
+  ((sizeof (response) == 8)                     \
+   && (sizeof (response.cik) == 3)              \
+   && (sizeof (response.status) == 1)           \
+   && (sizeof (response.payload_size) == 4)     \
+   && (sizeof (response.error_code) == 4)       \
+   && (offsetof (Response, cik) == 0)           \
+   && (offsetof (Response, status) == 3)        \
+   && (offsetof (Response, payload_size) == 4)  \
+   && (offsetof (Response, error_code) == 4))
+
 
 #endif /* ! TYPES_H */

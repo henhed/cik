@@ -166,9 +166,6 @@ set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
                 }
               if (CMP_ENTRY_KEYS (occupant, entry))
                 {
-#if DEBUG
-                  printf ("OVERWRITING \"%.*s\"\n", entry->key.nmemb, entry->key.base);
-#endif
                   if (old_entry != NULL)
                     {
 #if DEBUG

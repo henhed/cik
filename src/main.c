@@ -5,16 +5,20 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <threads.h>
 #include <unistd.h>
 
 #include "entry.h"
 #include "memory.h"
 #include "server.h"
+#include "profiler.h"
 
-volatile bool quit;
+volatile atomic_bool quit;
 
 static void sigint_handler (int);
 static void test_hash_map (void);
+
+static int server_accept_thread (void *);
 
 int
 main (int argc, char **argv)
@@ -26,34 +30,9 @@ main (int argc, char **argv)
   // Sanity checks
   {
     Request request;
-    assert (sizeof (request)               == 16);
-    assert (sizeof (request.cik)           == 3);
-    assert (sizeof (request.op)            == 1);
-    assert (sizeof (request.g.klen)        == 1);
-    assert (sizeof (request.g.flags)       == 1);
-    assert (sizeof (request.g._padding)    == 10);
-    assert (sizeof (request.s.klen)        == 1);
-    assert (sizeof (request.s.tlen)        == 3);
-    assert (sizeof (request.s.vlen)        == 4);
-    assert (offsetof (Request, cik)        == 0);
-    assert (offsetof (Request, op)         == 3);
-    assert (offsetof (Request, g.klen)     == 4);
-    assert (offsetof (Request, g.flags)    == 5);
-    assert (offsetof (Request, g._padding) == 6);
-    assert (offsetof (Request, s.klen)     == 4);
-    assert (offsetof (Request, s.tlen)     == 5);
-    assert (offsetof (Request, s.vlen)     == 8);
-
     Response response;
-    assert (sizeof (response)                 == 8);
-    assert (sizeof (response.cik)             == 3);
-    assert (sizeof (response.status)          == 1);
-    assert (sizeof (response.payload_size)    == 4);
-    assert (sizeof (response.error_code)      == 4);
-    assert (offsetof (Response, cik)          == 0);
-    assert (offsetof (Response, status)       == 3);
-    assert (offsetof (Response, payload_size) == 4);
-    assert (offsetof (Response, error_code)   == 4);
+    assert (IS_REQUEST_STRUCT_VALID (request));
+    assert (IS_RESPONSE_STRUCT_VALID (response));
 
     // We use errno codes in responses, don't know how platform specific these are!
     assert (ENODATA == 61);
@@ -62,9 +41,6 @@ main (int argc, char **argv)
   ////////////////////////////////////////
   // Init
 
-  // Ignore SIGPIPE so we don't get signalled when we write to a client that
-  // has closed the connection. Instead write () should return -EPIPE.
-  signal (SIGPIPE, SIG_IGN);
   // Try to cleanly exit given SIGINT
   signal (SIGINT, sigint_handler);
 
@@ -78,38 +54,77 @@ main (int argc, char **argv)
   if (0 > init_memory ())
     return EXIT_FAILURE;
 
+  FILE *info_file = fopen ("info.txt", "w");
+  int   info_fd   = fileno (info_file);
+
   ////////////////////////////////////////
   // ... Profit
   init_cache_entry_map (entry_map);
   test_hash_map (); // @Temporary
 
-  while (!quit)
+  float time_elapsed = 0.f;
+
+  thrd_t thread;
+  int err = thrd_create (&thread, server_accept_thread, NULL);
+  if (err < 0)
+    fprintf (stderr, "%s:%d: %s\n", __FUNCTION__, __LINE__, strerror (errno));
+
+  while (!atomic_load (&quit))
     {
-      int handled_requests;
-      server_accept ();
-      handled_requests = server_read ();
-      if (handled_requests > 0)
+      u64 start_tick = get_performance_counter ();
+      {
+        PROFILE (PROF_MAIN_LOOP);
+        server_read ();
+        sleep (0);
+      }
+      time_elapsed += ((float) (get_performance_counter () - start_tick)
+                       / get_performance_frequency ());
+      if (time_elapsed > 1.f)
         {
-          /* debug_print_memory (); */
+          time_elapsed -= 1.f;
+          rewind (info_file);
+          debug_print_profilers (info_fd);
         }
-      sleep (0);
     }
+
+  err = thrd_join (thread, NULL);
+  if (err < 0)
+    fprintf (stderr, "%s:%d: %s\n", __FUNCTION__, __LINE__, strerror (errno));
 
   ////////////////////////////////////////
   // Clean up
 
   printf ("\nShutting down ..\n");
+
+  fclose (info_file);
   stop_server ();
   release_memory ();
 
   return EXIT_SUCCESS;
 }
 
+static int
+server_accept_thread (void *user_data)
+{
+  (void) user_data;
+
+  printf ("Starting thread %s[0x%lX]\n", __FUNCTION__, thrd_current ());
+
+  while (!atomic_load (&quit))
+    {
+      struct timespec delay = {.tv_sec = 0, .tv_nsec = 0};
+      server_accept ();
+      thrd_sleep (&delay, NULL);
+    }
+
+  return thrd_success;
+}
+
 static void
 sigint_handler (int sig)
 {
   signal (sig, SIG_DFL);
-  quit = true;
+  atomic_store (&quit, true);
 }
 
 static void
