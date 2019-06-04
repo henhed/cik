@@ -12,6 +12,10 @@
 #include "entry.h"
 #include "profiler.h"
 
+#if DEBUG
+# include <assert.h>
+#endif
+
 typedef struct
 {
   int fd;
@@ -24,16 +28,51 @@ typedef struct
   int fd;
   struct sockaddr_in addr;
   socklen_t addrlen;
-  Response response;
   CacheEntry *response_entry; // @Temporary! We need output buffer per client
 } Client;
+
+typedef enum
+{
+  // 0x00 Series: Generates a sucess response
+  STATUS_OK                     = 0x00,
+
+  // 0x10 Series: Errors that close the client connection
+  MASK_INTERNAL_ERROR           = 0x10,
+  STATUS_BUG                    = 0x11,
+  STATUS_CONNECTION_CLOSED      = 0x12,
+  STATUS_NETWORK_ERROR          = 0x13,
+
+  // 0x20 Series: Errors that generate a failure response
+  MASK_CLIENT_ERROR             = 0x20,
+  STATUS_PROTOCOL_ERROR         = 0x21,
+
+  // 0x40 Series: Non-errors that generate a failure response
+  MASK_CLIENT_MESSAGE           = 0x40,
+  STATUS_NOT_FOUND              = 0x41,
+  STATUS_EXPIRED                = 0x42,
+  STATUS_OUT_OF_MEMORY          = 0x43
+} StatusCode;
+
+static const char *status_code_names[] = {
+  [STATUS_OK]                = "OK",
+  [STATUS_BUG]               = "BUG!",
+  [STATUS_CONNECTION_CLOSED] = "Connection closed",
+  [STATUS_NETWORK_ERROR]     = "Network error",
+  [STATUS_PROTOCOL_ERROR]    = "Protocol error",
+  [STATUS_NOT_FOUND]         = "Not found",
+  [STATUS_OUT_OF_MEMORY]     = "Out of memory"
+};
 
 static Server server = { 0 };
 static Client clients[MAX_NUM_CLIENTS] = {{ 0 }};
 static size_t num_clients = 0;
 
-static void close_client (Client *);
-static void debug_print_client (Client *);
+static StatusCode read_request           (Client *, Request *);
+static StatusCode read_request_payload   (Client *, u8 *, u32);
+static StatusCode write_response         (Client *, Response *);
+static StatusCode write_response_payload (Client *, u8 *, u32);
+static void       close_client           (Client *);
+static void       debug_print_client     (Client *);
 
 int
 start_server ()
@@ -123,7 +162,7 @@ server_accept ()
   return 0;
 }
 
-static int
+static StatusCode
 handle_get_request (Client *client, Request *request)
 {
   PROFILE (PROF_HANDLE_GET_REQUEST);
@@ -140,16 +179,16 @@ handle_get_request (Client *client, Request *request)
   // Read key
   nread = read (client->fd, tmp_key_data, klen);
   if (nread < 0)
-    return errno;
+    return STATUS_NETWORK_ERROR;
   if (nread != klen)
-    return EINVAL;
+    return STATUS_NETWORK_ERROR;
 
   key.base = tmp_key_data;
   key.nmemb = klen;
 
   entry = lock_and_get_cache_entry (entry_map, key);
   if (!entry)
-    return ENODATA;
+    return STATUS_NOT_FOUND;
 
   if (~flags & GET_FLAG_IGNORE_EXPIRY)
     {
@@ -159,7 +198,7 @@ handle_get_request (Client *client, Request *request)
           if (entry->expiry < now)
             {
               UNLOCK_ENTRY (entry);
-              return ENODATA; // @Revisit: Use different code for expired entry?
+              return STATUS_EXPIRED;
             }
         }
     }
@@ -170,10 +209,10 @@ handle_get_request (Client *client, Request *request)
 
   UNLOCK_ENTRY (entry);
 
-  return 0;
+  return STATUS_OK;
 }
 
-static int
+static StatusCode
 handle_set_request (Client *client, Request *request)
 {
   PROFILE (PROF_HANDLE_SET_REQUEST);
@@ -198,9 +237,9 @@ handle_set_request (Client *client, Request *request)
   // Read key
   nread = read (client->fd, tmp_key_data, klen);
   if (nread < 0)
-    return errno;
+    return STATUS_NETWORK_ERROR;
   if (nread != klen)
-    return EINVAL;
+    return STATUS_NETWORK_ERROR;
   remaining_size -= nread;
 
   // @Incomplete: Use key here and look if we have an existing entry
@@ -209,7 +248,7 @@ handle_set_request (Client *client, Request *request)
 
   entry = reserve_and_lock (total_size);
   if (entry == NULL)
-    return ENOMEM;
+    return STATUS_OUT_OF_MEMORY;
 
   payload = (u8 *) (entry + 1);
 
@@ -226,7 +265,7 @@ handle_set_request (Client *client, Request *request)
       if (nread < 0)
         {
           UNLOCK_ENTRY (entry);
-          return errno;
+          return STATUS_NETWORK_ERROR;
         }
       remaining_size -= nread;
     }
@@ -255,21 +294,21 @@ handle_set_request (Client *client, Request *request)
 
   UNLOCK_ENTRY (entry);
 
-  return 0;
+  return STATUS_OK;
 }
 
-static int
+static StatusCode
 handle_request (Client *client, Request *request)
 {
   PROFILE (PROF_HANDLE_REQUEST);
 
   if (!client || !request)
-    return EINVAL;
+    return STATUS_BUG;
 
   if ((request->cik[0] != CONTROL_BYTE_1)
       || (request->cik[1] != CONTROL_BYTE_2)
       || (request->cik[2] != CONTROL_BYTE_3))
-    return EINVAL;
+    return STATUS_PROTOCOL_ERROR;
 
   switch (request->op)
     {
@@ -280,7 +319,7 @@ handle_request (Client *client, Request *request)
       request->s.ttl  = ntohl (request->s.ttl);
       return handle_set_request (client, request);
     default:
-      return ENOSYS;
+      return STATUS_PROTOCOL_ERROR;
     }
 }
 
@@ -289,7 +328,6 @@ server_read ()
 {
   PROFILE (PROF_SERVER_READ);
 
-  int nrequests = 0;
   struct epoll_event events[MAX_NUM_EVENTS] = {{ 0 }};
   int nevents = epoll_wait (server.epfd, events, MAX_NUM_EVENTS, 0);
   if (nevents < 0)
@@ -302,90 +340,53 @@ server_read ()
   for (int i = 0; i < nevents; ++i)
     {
       struct epoll_event *event = &events[i];
-      if (event->events & EPOLLIN)
+      if ((event->events & (EPOLLIN | EPOLLOUT)) == (EPOLLIN | EPOLLOUT))
         {
           Client *client = event->data.ptr;
           Request request = { 0 };
-          ssize_t nread;
-          int err;
+          Response response = { 0 };
+          StatusCode status;
 
-          if (client->response.cik[0] != 0x00)
-            continue; // This client has a pending response
-
-          nread = read (client->fd, &request, sizeof (request));
-          if (nread == 0)
+          errno = 0;
+          status = read_request (client, &request);
+          if (status & MASK_INTERNAL_ERROR)
             {
-              fprintf (stderr, "%s: Connection closed (FD %d)\n",
-                       __FUNCTION__, client->fd);
-              // @Revisit: Thread safety. What happens if we have a thread
-              // working on a response? Also, how to respond to client?
+              fprintf (stderr, "%s: (FD %d) %s [%s]\n", __FUNCTION__,
+                       client->fd, status_code_names[status], strerror (errno));
               close_client (client);
               continue;
             }
-          else if (nread != sizeof (request))
+
+          errno = 0;
+          status = handle_request (client, &request);
+          if (status & MASK_INTERNAL_ERROR)
             {
-              fprintf (stderr, "%s: Invalid read (FD %d). Expected %lu, got %ld\n",
-                       __FUNCTION__, client->fd, sizeof (request), nread);
-              // @Revisit: Thread safety. What happens if we have a thread
-              // working on a response? Also, how to respond to client?
+              fprintf (stderr, "%s: (FD %d) %s [%s]\n", __FUNCTION__,
+                       client->fd, status_code_names[status], strerror (errno));
               close_client (client);
               continue;
             }
-          else if (0 != (err = handle_request (client, &request)))
+          if (status & (MASK_CLIENT_ERROR | MASK_CLIENT_MESSAGE))
             {
-              u32 error_code = err < 0 ? -err : err;
-              client->response.cik[0] = CONTROL_BYTE_1;
-              client->response.cik[1] = CONTROL_BYTE_2;
-              client->response.cik[2] = CONTROL_BYTE_3;
-              client->response.status = FAILURE_BYTE;
-              client->response.error_code = htonl (error_code);
-              ++nrequests;
+              response = MAKE_FAILURE_RESPONSE (status);
             }
           else
             {
-              client->response.cik[0] = CONTROL_BYTE_1;
-              client->response.cik[1] = CONTROL_BYTE_2;
-              client->response.cik[2] = CONTROL_BYTE_3;
-              client->response.status = SUCCESS_BYTE;
+#if DEBUG
+              assert (status == STATUS_OK);
+#endif
+              u32 size = 0;
               if (client->response_entry != NULL)
-                {
-                  // @Temporary!!
-                  CacheEntry *entry = client->response_entry;
-                  client->response.payload_size = htonl (entry->value.nmemb);
-                }
-              else
-                {
-                  client->response.payload_size = htonl (0);
-                }
-              ++nrequests;
+                size = client->response_entry->value.nmemb; // @Temporary!!
+              response = MAKE_SUCCESS_RESPONSE (size);
             }
-        }
 
-      if (event->events & EPOLLOUT)
-        {
-          Client *client = event->data.ptr;
-          ssize_t nsent;
-
-          // @Incomplete: Response must have variable length.
-
-          if (client->response.cik[0] == 0x00)
-            continue; // This client has no pending response
-
-          nsent = send (client->fd, &client->response, sizeof (client->response),
-                        MSG_NOSIGNAL);
-          client->response.cik[0] = 0x00; // Invalidate response to accept new reads
-
-          if (nsent < 0)
+          errno = 0;
+          status = write_response (client, &response);
+          if (status & MASK_INTERNAL_ERROR)
             {
-              fprintf (stderr, "%s: Failed to write to FD %d: %s\n",
-                       __FUNCTION__, client->fd, strerror (errno));
-              close_client (client);
-              continue;
-            }
-          if (nsent != sizeof (client->response))
-            {
-              fprintf (stderr, "%s: Wrote %ld but %lu was expected IF (%d)\n",
-                       __FUNCTION__, nsent, sizeof (client->response), client->fd);
+              fprintf (stderr, "%s: (FD %d) %s [%s]\n", __FUNCTION__,
+                       client->fd, status_code_names[status], strerror (errno));
               close_client (client);
               continue;
             }
@@ -394,25 +395,26 @@ server_read ()
           if (client->response_entry)
             {
               CacheEntry *entry = client->response_entry;
-              nsent = send (client->fd, entry->value.base, entry->value.nmemb,
-                            MSG_NOSIGNAL);
+              status = write_response_payload (client,
+                                               entry->value.base,
+                                               entry->value.nmemb);
               client->response_entry = NULL;
             }
         }
 
       if (event->events & (EPOLLERR | EPOLLHUP))
         {
-          // @Revisit: Thread safety. What happens if we have a thread
-          // working on a response? Also, how to respond to client?
           Client *client = event->data.ptr;
           close_client (client);
+#if DEBUG
           fprintf (stderr, "%s: Got error event: 0x%X\n",
                    __FUNCTION__, event->events);
+#endif
           continue;
         }
     }
 
-  return nrequests;
+  return nevents;
 }
 
 void
@@ -422,6 +424,66 @@ stop_server ()
     close_client (&clients[i]);
   close (server.epfd);
   close (server.fd);
+}
+
+static StatusCode
+read_request (Client *client, Request *request)
+{
+  return read_request_payload (client, (u8 *) request, sizeof (Request));
+}
+
+static StatusCode
+read_request_payload (Client *client, u8 *base, u32 nmemb)
+{
+  ssize_t nread = 0, remaining_size = nmemb;
+#if DEBUG
+  assert (client);
+  assert (base);
+#endif
+
+  do
+    {
+      nread = read (client->fd, base, remaining_size);
+      if (nread < 0)
+        return STATUS_NETWORK_ERROR;
+      if (nread == 0)
+        return STATUS_CONNECTION_CLOSED;
+      base += nread;
+      remaining_size -= nread;
+    }
+  while (remaining_size > 0);
+
+  return STATUS_OK;
+}
+
+static StatusCode
+write_response (Client *client, Response *response)
+{
+  return write_response_payload (client, (u8 *) response, sizeof (Response));
+}
+
+static StatusCode
+write_response_payload (Client *client, u8 *base, u32 nmemb)
+{
+  ssize_t nsent = 0, remaining_size = nmemb;
+#if DEBUG
+  assert (client);
+  assert (base);
+#endif
+
+  do
+    {
+      nsent = send (client->fd, base, remaining_size, MSG_NOSIGNAL);
+      if (nsent < 0)
+        return STATUS_NETWORK_ERROR;
+      if (nsent == 0)
+        return STATUS_CONNECTION_CLOSED;
+      base += nsent;
+      remaining_size -= nsent;
+    }
+  while (remaining_size > 0);
+
+  return STATUS_OK;
 }
 
 static void
@@ -435,7 +497,6 @@ close_client (Client *client)
   debug_print_client (client);
   close (client->fd);
   client->fd = -1;
-  client->response.cik[0] = 0x00; // Invalidate response to accept new reads
 }
 
 static void

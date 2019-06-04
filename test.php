@@ -37,7 +37,7 @@ class CiK //implements Zend_Cache_Backend_Interface
     /**#@+
      * Error codes
      */
-    const ENODATA = 0x3D;
+    const ENODATA = 0x41;
     /**#@-*/
 
     /** @var resource */
@@ -234,7 +234,7 @@ class CiK //implements Zend_Cache_Backend_Interface
         if (!$success) {
             $errorCode = $response['sizeOrError'];
             throw new \Exception(sprintf(
-                'CiK returned error code %d',
+                'CiK returned error code 0x%X',
                 $errorCode
             ), $errorCode);
         }
@@ -271,7 +271,7 @@ try {
 
     $totalSize = 0;
     $message = 'It\'s going';
-    for ($i = 0; $i < 1000; ++$i) {
+    for ($i = 0; $i < 100; ++$i) {
         $key = 'Key is ' . $i;
         $startTime = microtime(true);
         $success = $cik->save($message, $key, [], 10);

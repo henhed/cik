@@ -157,5 +157,24 @@ typedef struct __attribute__((packed))
    && (offsetof (Response, payload_size) == 4)  \
    && (offsetof (Response, error_code) == 4))
 
+#define MAKE_SUCCESS_RESPONSE(size) (Response) {    \
+  .cik = {                                          \
+    [0] = CONTROL_BYTE_1,                           \
+    [1] = CONTROL_BYTE_2,                           \
+    [2] = CONTROL_BYTE_3                            \
+  },                                                \
+  .status = SUCCESS_BYTE,                           \
+  .payload_size = htonl ((u32) size)                \
+}
+
+#define MAKE_FAILURE_RESPONSE(error) (Response) {   \
+  .cik = {                                          \
+    [0] = CONTROL_BYTE_1,                           \
+    [1] = CONTROL_BYTE_2,                           \
+    [2] = CONTROL_BYTE_3                            \
+  },                                                \
+  .status = FAILURE_BYTE,                           \
+  .error_code = htonl ((u32) error)                 \
+}
 
 #endif /* ! TYPES_H */
