@@ -31,12 +31,6 @@ typedef struct
   socklen_t addrlen;
 } Client;
 
-typedef struct
-{
-  u8 *base;
-  u32 nmemb;
-} Payload;
-
 static Server server = { 0 };
 static Client clients[MAX_NUM_CLIENTS] = {{ 0 }};
 static size_t num_clients = 0;
@@ -136,10 +130,8 @@ server_accept ()
   return 0;
 }
 
-// @Revisit: Maybe static allocation is a bad idea here. Depends on the size
-// of MAX_BUCKET_SIZE I guess. Should maybe be handled by memory.c instead.
-static thread_local u8      payload_buffer[MAX_BUCKET_SIZE];
-static thread_local Payload the_payload = { 0 };
+static thread_local u32     the_payload_cap = 0;
+static thread_local Payload the_payload     = { .base = NULL, .nmemb = 0 };
 
 static StatusCode
 handle_get_request (Client *client, Request *request, Payload **response_payload)
@@ -154,6 +146,14 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
 
   CacheKey key;
   u8 tmp_key_data[0xFF];
+
+  if (the_payload.base == NULL)
+    {
+      if (!reserve_biggest_possible_payload (&the_payload))
+        return STATUS_OUT_OF_MEMORY;
+      // We overwrite nmemb below so we save initial value here
+      the_payload_cap = the_payload.nmemb;
+    }
 
   // Read key
   status = read_request_payload (client, tmp_key_data, klen);
@@ -180,9 +180,11 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
         }
     }
 
+  if (entry->value.nmemb > the_payload_cap)
+    return STATUS_BUG; // We should always have a buffer big enough
+
   // We copy the entry value to a payload buffer so we don't have to keep
   // the entity locked while writing it's data to the client.
-  the_payload.base = payload_buffer;
   the_payload.nmemb = entry->value.nmemb;
   memcpy (the_payload.base, entry->value.base, the_payload.nmemb);
   *response_payload = &the_payload;
@@ -221,7 +223,7 @@ handle_set_request (Client *client, Request *request)
   // Right now we're always reserving new memory and releasing the old.
   // But who knows, maybe reserving new memory will be faster in the end.
 
-  entry = reserve_and_lock (total_size);
+  entry = reserve_and_lock_entry (total_size);
   if (entry == NULL)
     return STATUS_OUT_OF_MEMORY;
 

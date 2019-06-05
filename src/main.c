@@ -84,6 +84,7 @@ main (int argc, char **argv)
           time_elapsed -= 1.f;
           rewind (info_file);
           debug_print_profilers (info_fd);
+          debug_print_memory (info_fd);
         }
     }
 
@@ -98,7 +99,7 @@ main (int argc, char **argv)
 
   fclose (info_file);
   stop_server ();
-  release_memory ();
+  release_all_memory ();
 
   return EXIT_SUCCESS;
 }
@@ -136,7 +137,7 @@ test_hash_map ()
   CacheValue myval1 = {(u8 *) "myval1", strlen ("myval1")};
 
   CacheEntry *entry0, *old_entry;
-  entry0 = reserve_and_lock (mykey0.nmemb + myval0.nmemb);
+  entry0 = reserve_and_lock_entry (mykey0.nmemb + myval0.nmemb);
   entry0->key = mykey0; // !! Not pointing to reserved memory
   entry0->value = myval0; // !! Not pointing to reserved memory
   old_entry = NULL;
@@ -145,7 +146,7 @@ test_hash_map ()
   assert (old_entry == NULL);
 
   CacheEntry *entry1;
-  entry1 = reserve_and_lock (mykey0.nmemb + myval0.nmemb);
+  entry1 = reserve_and_lock_entry (mykey0.nmemb + myval0.nmemb);
   entry1->key = mykey0; // !! Not pointing to reserved memory
   entry1->value = myval0; // !! Not pointing to reserved memory
   old_entry = NULL;
@@ -161,7 +162,7 @@ test_hash_map ()
   assert (old_entry == NULL);
 
   CacheEntry *entry2;
-  entry2 = reserve_and_lock (mykey1.nmemb + myval1.nmemb);
+  entry2 = reserve_and_lock_entry (mykey1.nmemb + myval1.nmemb);
   entry2->key = mykey1; // !! Not pointing to reserved memory
   entry2->value = myval1; // !! Not pointing to reserved memory
   set_locked_cache_entry (entry_map, entry2, NULL);

@@ -39,6 +39,12 @@ typedef struct
   u8 nmemb;
 } CacheTag;
 
+typedef struct
+{
+  u8 *base;
+  u32 nmemb;
+} Payload;
+
 typedef CacheTag CacheTagList[MAX_NUM_TAGS_PER_ENTRY];
 
 typedef struct
@@ -47,7 +53,6 @@ typedef struct
   CacheValue value;
   CacheTagList tags;
   time_t expiry;
-  u32 waste;
   atomic_flag guard;
 } CacheEntry;
 

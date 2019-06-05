@@ -216,13 +216,12 @@ debug_print_entry (CacheEntry *entry)
 {
   bool expires = (entry->expiry != CACHE_EXPIRY_INIT);
   printf ("%s: Content is: {\n"
-          " TTL: %ld, WASTE: %u\n"
+          " TTL: %ld\n"
           " KEY: \"%.*s\"\n"
           " TAGS: [\"%.*s\", \"%.*s\", \"%.*s\"]\n"
           " VAL: \"%.*s\"\n}\n",
           __FUNCTION__,
           expires ? (entry->expiry - time (NULL)) : -1,
-          entry->waste,
           entry->key.nmemb,     entry->key.base,
           entry->tags[0].nmemb, entry->tags[0].base,
           entry->tags[1].nmemb, entry->tags[1].base,

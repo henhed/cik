@@ -1,5 +1,7 @@
 #include <assert.h>
 #include <errno.h>
+#include <stdalign.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -13,8 +15,9 @@ typedef struct
 {
   u32 size;
   u32 cap;
-  u32 nmemb;
+  _Atomic u32 nmemb;
   u8 *base;
+  atomic_flag *occupancy_mask;
 } Bucket;
 
 CacheEntryHashMap *entry_map = NULL;
@@ -44,10 +47,11 @@ init_memory ()
       bucket = &buckets[num_buckets++];
       bucket->size  = size;
       bucket->cap   = cap;
-      bucket->nmemb = 0;
       bucket->base  = NULL;
+      bucket->occupancy_mask = NULL;
+      atomic_init (&bucket->nmemb, 0);
 
-      total_bucket_size += size * cap;
+      total_bucket_size += (size + sizeof (atomic_flag)) * cap;
     }
   printf ("Total bucket memory is %lu\n", total_bucket_size);
 
@@ -74,17 +78,28 @@ init_memory ()
     }
 
   memory_cursor = main_memory;
+  assert (((intptr_t) memory_cursor % alignof (max_align_t)) == 0);
 
   for (u32 b = 0; b < num_buckets; ++b)
     {
       Bucket *bucket = &buckets[b];
       size_t bucket_size = bucket->size * bucket->cap;
+      size_t mask_size = sizeof (atomic_flag) * bucket->cap;
+
       bucket->base = memory_cursor;
       memory_cursor += bucket_size;
+      assert (((intptr_t) memory_cursor % alignof (max_align_t)) == 0);
+
+      bucket->occupancy_mask = memory_cursor;
+      for (u32 f = 0; f < bucket->cap; ++f)
+        bucket->occupancy_mask[f] = (atomic_flag) ATOMIC_FLAG_INIT;
+      memory_cursor += mask_size;
+      assert (((intptr_t) memory_cursor % alignof (max_align_t)) == 0);
     }
 
   entry_map = memory_cursor;
   memory_cursor += sizeof (CacheEntryHashMap);
+  assert (((intptr_t) memory_cursor % alignof (max_align_t)) == 0);
 
   // Make sure all allocations are accounted for
   assert ((size_t) (memory_cursor - main_memory) == total_memory_size);
@@ -92,35 +107,119 @@ init_memory ()
   return 0;
 }
 
-CacheEntry *
-reserve_and_lock (size_t payload_size)
+#define PADDING(T) \
+  ((alignof (max_align_t) - (sizeof (T) % alignof (max_align_t))) \
+   % alignof (max_align_t))
+
+void *
+reserve_memory (u32 size)
 {
-  CacheEntry *entry = NULL;
-  size_t total_size = sizeof (CacheEntry) + payload_size;
+  u32 head_size = sizeof (atomic_flag *) + PADDING (atomic_flag *);
+  u32 total_size = head_size + size;
+
+  if ((UINT32_MAX - head_size) < size)
+    return NULL; // `total_size' has overflowed
+
   for (u32 i = 0; i < num_buckets; ++i)
     {
       Bucket *bucket = &buckets[i];
       if (bucket->size < total_size)
         continue;
-      if (bucket->nmemb < bucket->cap)
+
+      u32 m = atomic_fetch_add (&bucket->nmemb, 1);
+      if (m < bucket->cap)
         {
-          u8 *memory = bucket->base + (bucket->nmemb * bucket->size);
-          entry = (CacheEntry *) memory;
-          *entry = CACHE_ENTRY_INIT;
-          LOCK_ENTRY (entry);
-          entry->waste = bucket->size - total_size;
-          ++bucket->nmemb;
-          break;
+          u8 *memory = NULL;
+#if DEBUG
+          assert (atomic_flag_test_and_set (&bucket->occupancy_mask[m]) == false);
+#else
+          atomic_flag_test_and_set (&bucket->occupancy_mask[m]);
+#endif
+          memory = bucket->base + (m * bucket->size);
+          *(atomic_flag **) memory = &bucket->occupancy_mask[m];
+          memory += head_size;
+          return memory;
+        }
+
+      // We can increment nmemb past cap so we'll have to be careful not to
+      // trust it too much elsewhere.
+      atomic_store (&bucket->nmemb, bucket->cap);
+
+      for (u32 m = 0, cap = bucket->cap; m < cap; ++m)
+        {
+          u8 *memory = NULL;
+          if (atomic_flag_test_and_set (&bucket->occupancy_mask[m]))
+            continue;
+          memory = bucket->base + (m * bucket->size);
+          *(atomic_flag **) memory = &bucket->occupancy_mask[m];
+          memory += head_size;
+          return memory;
         }
     }
 
-  // @Incomplete: Evict something old if entry is still NULL here
+  return NULL;
+}
+
+void
+release_memory (void *memory)
+{
+  u32 head_size = sizeof (atomic_flag *) + PADDING (atomic_flag *);
+#if DEBUG
+  assert (memory != NULL);
+#endif
+  memory -= head_size;
+#if DEBUG
+  assert (atomic_flag_test_and_set (*(atomic_flag **) memory));
+#endif
+  atomic_flag_clear (*(atomic_flag **) memory);
+}
+
+CacheEntry *
+reserve_and_lock_entry (size_t payload_size)
+{
+  CacheEntry *entry = NULL;
+  size_t total_size = sizeof (CacheEntry) + payload_size;
+
+  entry = reserve_memory (total_size);
+  if (entry == NULL)
+    {
+      // @Incomplete: Evict something old if entry is NULL here we should never
+      // fail to allocate an entry I think.
+      assert (false);
+      return NULL;
+    }
+
+  *entry = CACHE_ENTRY_INIT;
+  LOCK_ENTRY (entry);
 
   return entry;
 }
 
+bool
+reserve_biggest_possible_payload (Payload *payload)
+{
+  // @Revisit: Maybe this head_size should be baked into the bucket somehow?
+  // It seem error prone to calculate it everywhere.
+  u32 head_size = sizeof (atomic_flag *) + PADDING (atomic_flag *);
+#if DEBUG
+  assert (payload != NULL);
+#endif
+  for (u32 i = num_buckets - 1; (s32) i >= 0; --i)
+    {
+      Bucket *bucket = &buckets[i];
+      u32 size = bucket->size - head_size;
+      payload->base = reserve_memory (size);
+      if (payload->base != NULL)
+        {
+          payload->nmemb = size;
+          return true;
+        }
+    }
+  return false;
+}
+
 void
-release_memory ()
+release_all_memory ()
 {
   if (0 != munmap (main_memory, total_memory_size))
     {
@@ -130,18 +229,18 @@ release_memory ()
 }
 
 void
-debug_print_memory ()
+debug_print_memory (int fd)
 {
+  dprintf (fd, "Memory buckets:\n");
+  dprintf (fd, "%-12s%-12s%-12s%-12s\n", "Size", "Capacity", "Members", "Usage%");
+
   for (u32 b = 0; b < num_buckets; ++b)
     {
       Bucket *bucket = &buckets[b];
-      for (u32 e = 0; e < bucket->nmemb; ++e)
-        {
-          u8 *memory = bucket->base + (e * bucket->size);
-          CacheEntry *entry = (CacheEntry *) memory;
-          LOCK_ENTRY (entry);
-          debug_print_entry (entry);
-          UNLOCK_ENTRY (entry);
-        }
+      dprintf (fd, "0x%-10X0x%-10X0x%-10X%-12.2f\n",
+               bucket->size, bucket->cap, bucket->nmemb,
+               100.f * ((float) bucket->nmemb / bucket->cap));
     }
+
+  dprintf (fd, "------------------------------------------------------\n");
 }

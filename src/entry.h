@@ -13,7 +13,6 @@
   .value  = CACHE_VALUE_INIT,           \
   .tags   = CACHE_TAGS_INIT,            \
   .expiry = CACHE_EXPIRY_INIT,          \
-  .waste  = 0,                          \
   .guard  = ATOMIC_FLAG_INIT            \
 }
 
