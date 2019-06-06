@@ -23,6 +23,7 @@ static const char *profiler_names[NUM_PROFILERS] = {
   [PROF_SERVER_ACCEPT]      = "server_accept",
   [PROF_HANDLE_GET_REQUEST] = "handle_get_request",
   [PROF_HANDLE_SET_REQUEST] = "handle_set_request",
+  [PROF_HANDLE_DEL_REQUEST] = "handle_del_request",
   [PROF_HANDLE_REQUEST]     = "handle_request",
   [PROF_SERVER_READ]        = "server_read",
   [PROF_CLOSE_CLIENT]       = "close_client"

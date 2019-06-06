@@ -135,6 +135,9 @@ get_status_code_name (StatusCode code)
 #define CONTROL_BYTE_3 0x4B // 'K'
 #define CMD_BYTE_GET   0x67 // 'g'
 #define CMD_BYTE_SET   0x73 // 's'
+#define CMD_BYTE_DEL   0x64 // 'd'
+#define CMD_BYTE_CLR   0x63 // 'c'
+#define CMD_BYTE_PRG   0x70 // 'p'
 #define SUCCESS_BYTE   0x74 // 't'
 #define FAILURE_BYTE   0x66 // 'f'
 
@@ -160,6 +163,11 @@ typedef struct __attribute__((packed))
       u32 vlen;
       u32 ttl;
     } s;
+    struct __attribute__((packed))
+    {
+      u8 klen;
+      u8 _padding[11];
+    } d;
   };
 } Request;
 
@@ -173,6 +181,8 @@ typedef struct __attribute__((packed))
    && (sizeof (request.s.klen) == 1)            \
    && (sizeof (request.s.tlen) == 3)            \
    && (sizeof (request.s.vlen) == 4)            \
+   && (sizeof (request.d.klen) == 1)            \
+   && (sizeof (request.d._padding) == 11)       \
    && (offsetof (Request, cik) == 0)            \
    && (offsetof (Request, op) == 3)             \
    && (offsetof (Request, g.klen) == 4)         \
@@ -180,7 +190,10 @@ typedef struct __attribute__((packed))
    && (offsetof (Request, g._padding) == 6)     \
    && (offsetof (Request, s.klen) == 4)         \
    && (offsetof (Request, s.tlen) == 5)         \
-   && (offsetof (Request, s.vlen) == 8))
+   && (offsetof (Request, s.vlen) == 8)         \
+   && (offsetof (Request, d.klen) == 4)         \
+   && (offsetof (Request, d._padding) == 5)     \
+   )
 
 typedef struct __attribute__((packed))
 {

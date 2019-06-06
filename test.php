@@ -18,6 +18,7 @@ class CiK //implements Zend_Cache_Backend_Interface
     const CONTROL_BYTE_3 = 0x4B; // 'K'
     const CMD_BYTE_GET   = 0x67; // 'g'
     const CMD_BYTE_SET   = 0x73; // 's'
+    const CMD_BYTE_DEL   = 0x64; // 'd'
     /**#@-*/
 
     /**#@+
@@ -35,9 +36,19 @@ class CiK //implements Zend_Cache_Backend_Interface
     /**#@-*/
 
     /**#@+
-     * Error codes
+     * Status codes
      */
-    const ENODATA = 0x41;
+    const STATUS_OK                     = 0x00;
+    const MASK_INTERNAL_ERROR           = 0x10;
+    const STATUS_BUG                    = 0x11;
+    const STATUS_CONNECTION_CLOSED      = 0x12;
+    const STATUS_NETWORK_ERROR          = 0x13;
+    const MASK_CLIENT_ERROR             = 0x20;
+    const STATUS_PROTOCOL_ERROR         = 0x21;
+    const MASK_CLIENT_MESSAGE           = 0x40;
+    const STATUS_NOT_FOUND              = 0x41;
+    const STATUS_EXPIRED                = 0x42;
+    const STATUS_OUT_OF_MEMORY          = 0x43;
     /**#@-*/
 
     /** @var resource */
@@ -84,8 +95,8 @@ class CiK //implements Zend_Cache_Backend_Interface
         try {
             return $this->readMessage();
         } catch (\Exception $e) {
-            if ($e->getCode() == self::ENODATA) {
-                return false;
+            if ($e->getCode() & self::MASK_CLIENT_MESSAGE) {
+                return false; // Not an actual error
             }
             throw $e;
         }
@@ -93,7 +104,7 @@ class CiK //implements Zend_Cache_Backend_Interface
 
     public function test(string $id)
     {
-        return false;
+        return $this->load($id) !== false;
     }
 
     public function save(
@@ -116,12 +127,23 @@ class CiK //implements Zend_Cache_Backend_Interface
 
     public function remove(string $id): bool
     {
-        return false;
+        $message = $this->makeDelMessage($id);
+        if (!$this->writeMessage($message)) {
+            return false;
+        }
+        try {
+            return ('' === $this->readMessage());
+        } catch (\Exception $e) {
+            if ($e->getCode() & self::MASK_CLIENT_MESSAGE) {
+                return false; // Not an actual error
+            }
+            throw $e;
+        }
     }
 
     public function clean(string $mode = 'all', array $tags = []): bool
     {
-        return false;
+        throw new \Exception(__METHOD__ . ' not implmented');
     }
 
     private function formatKey(string $key): string
@@ -196,6 +218,28 @@ class CiK //implements Zend_Cache_Backend_Interface
         return $head . $key . $tag0 . $tag1 . $tag2 . $value;
     }
 
+    private function makeDelMessage(string $key): string
+    {
+        // :DEL
+        // Size         Offset          Value
+        // char[3]      0               'CiK' (Sanity)
+        // char         3               'd'   (OP code)
+        // u8           4               Key length
+        // u8[11]       6               Padding
+        // void *       16              (key)
+        $key  = $this->formatKey($key);
+        $klen = strlen($key);
+        $head = pack(
+            'c3cC@16',
+            self::CONTROL_BYTE_1,
+            self::CONTROL_BYTE_2,
+            self::CONTROL_BYTE_3,
+            self::CMD_BYTE_DEL,
+            $klen
+        );
+        return $head . $key;
+    }
+
     private function writeMessage(string $message): bool
     {
         $messageSize = strlen($message);
@@ -212,7 +256,7 @@ class CiK //implements Zend_Cache_Backend_Interface
     private function readMessage(): string
     {
         $header = fread($this->fd, 8);
-        $response = unpack('c3cik/c1status/NsizeOrError', (string) $header);
+        $response = @unpack('c3cik/c1status/NsizeOrError', (string) $header);
         if (!is_array($response)) {
             throw new \Exception(sprintf(
                 'Failed to parse CiK response header: 0x%s',
@@ -263,6 +307,65 @@ class CiK //implements Zend_Cache_Backend_Interface
 
 ($_SERVER['REQUEST_URI'] == '/favicon.ico') && die;
 
+?>
+<script>
+setTimeout(function () {
+    window.location.reload();
+}, 1000);
+</script>
+<?php
+
+$cik = new CiK();
+
+echo 'Set an entry';
+$success = $cik->save(
+    'Buy our stuff',
+    'A message from our sponsors',
+    [
+        'catalog_product_13',
+        'store_1',
+        'CONFIG'
+    ],
+    10
+);
+
+var_dump($success);
+
+echo 'Remove the same entry';
+$success = $cik->remove('A message from our sponsors');
+var_dump($success);
+
+echo 'Remove a non-existent entry';
+$success = $cik->remove('This doesn\'t exist');
+var_dump($success);
+
+echo 'Remove the already removed entry';
+$success = $cik->remove('A message from our sponsors');
+var_dump($success);
+
+// $success = $cik->clean('all', [
+//     'store_1',
+//     'CONFIG'
+// ]);
+
+// var_dump($success);
+
+$success = $cik->save(
+    'Buy our stuff',
+    'A message from our sponsors, take #2',
+    [
+        'catalog_product_13',
+        'store_1',
+        'CONFIG...'
+    ],
+    10
+);
+
+var_dump($success);
+
+var_dump(date('Y-m-d H:i:s'));
+
+exit;
 $saveTime = 0;
 $loadTime = 0;
 

@@ -99,7 +99,7 @@ init_memory ()
 
   entry_map = memory_cursor;
   memory_cursor += sizeof (CacheEntryHashMap);
-  assert (((intptr_t) memory_cursor % alignof (max_align_t)) == 0);
+  /* assert (((intptr_t) memory_cursor % alignof (max_align_t)) == 0); */
 
   // Make sure all allocations are accounted for
   assert ((size_t) (memory_cursor - main_memory) == total_memory_size);
@@ -141,8 +141,8 @@ reserve_memory (u32 size)
           return memory;
         }
 
-      // We can increment nmemb past cap so we'll have to be careful not to
-      // trust it too much elsewhere.
+      // @Race: We can increment nmemb past cap so we'll have to be careful not
+      // to trust it too much elsewhere.
       atomic_store (&bucket->nmemb, bucket->cap);
 
       for (u32 m = 0, cap = bucket->cap; m < cap; ++m)
@@ -171,6 +171,7 @@ release_memory (void *memory)
 #if DEBUG
   assert (atomic_flag_test_and_set (*(atomic_flag **) memory));
 #endif
+  // The atomic_flag here is a pointer to an occupancy_mask entry
   atomic_flag_clear (*(atomic_flag **) memory);
 }
 

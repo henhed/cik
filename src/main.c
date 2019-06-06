@@ -149,6 +149,7 @@ test_hash_map ()
   entry1 = reserve_and_lock_entry (mykey0.nmemb + myval0.nmemb);
   entry1->key = mykey0; // !! Not pointing to reserved memory
   entry1->value = myval0; // !! Not pointing to reserved memory
+
   old_entry = NULL;
   set_locked_cache_entry (entry_map, entry1, &old_entry);
   UNLOCK_ENTRY (entry1);
@@ -177,10 +178,17 @@ test_hash_map ()
   UNLOCK_ENTRY (entry3);
   // Try to get same entry again to test internal slot locking
   entry3 = lock_and_get_cache_entry (entry_map, mykey1);
+  assert (entry3 != NULL);
   UNLOCK_ENTRY (entry3);
 
   CacheEntry *entry4;
   CacheKey newkey = {(u8 *) "marklar", strlen ("marklar")};
   entry4 = lock_and_get_cache_entry (entry_map, newkey);
   assert (entry4 == NULL);
+
+  CacheEntry *unset = lock_and_unset_cache_entry (entry_map, mykey1);
+  assert (unset != NULL);
+  UNLOCK_ENTRY (unset);
+  unset = lock_and_unset_cache_entry (entry_map, mykey1);
+  assert (unset == NULL);
 }

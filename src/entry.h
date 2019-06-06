@@ -20,9 +20,11 @@
 #define UNLOCK_ENTRY(e) atomic_flag_clear (&(e)->guard)
 #define TRY_LOCK_ENTRY(e) (!atomic_flag_test_and_set (&(e)->guard))
 
-void        init_cache_entry_map     (CacheEntryHashMap *);
-CacheEntry *lock_and_get_cache_entry (CacheEntryHashMap *, CacheKey);
-bool        set_locked_cache_entry   (CacheEntryHashMap *, CacheEntry *, CacheEntry **);
-void        debug_print_entry        (CacheEntry *);
+void        init_cache_entry_map        (CacheEntryHashMap *);
+CacheEntry *lock_and_get_cache_entry    (CacheEntryHashMap *, CacheKey);
+CacheEntry *lock_and_unset_cache_entry  (CacheEntryHashMap *, CacheKey);
+bool        set_locked_cache_entry      (CacheEntryHashMap *, CacheEntry *,
+                                         CacheEntry **);
+void        debug_print_entry           (CacheEntry *);
 
 #endif /* ! ENTRY_H */

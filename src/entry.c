@@ -105,6 +105,63 @@ lock_and_get_cache_entry (CacheEntryHashMap *map, CacheKey key)
   return NULL;
 }
 
+CacheEntry *
+lock_and_unset_cache_entry (CacheEntryHashMap *map, CacheKey key)
+{
+  u32 hash, slot, pos;
+
+#if DEBUG
+  assert (map);
+  assert (key.base);
+  assert (key.nmemb > 0);
+#endif
+
+  hash = get_key_hash (key);
+  slot = hash % MAX_NUM_CACHE_ENTRIES;
+  pos  = slot;
+
+  do
+    {
+      LOCK_SLOT (map, pos);
+      if (map->mask[pos])
+        {
+          if (map->hashes[pos] == hash)
+            {
+              if (!TRY_LOCK_ENTRY (map->entries[pos]))
+                {
+#if DEBUG
+                  fprintf (stderr, "%s: SPINNING \"%.*s\"\n", __FUNCTION__,
+                           map->entries[pos]->key.nmemb, map->entries[pos]->key.base);
+#endif
+                  LOCK_ENTRY (map->entries[pos]);
+#if DEBUG
+                  fprintf (stderr, "%s: GOT LOCK \"%.*s\"\n", __FUNCTION__,
+                           map->entries[pos]->key.nmemb, map->entries[pos]->key.base);
+#endif
+                }
+              if (CMP_KEYS (map->entries[pos]->key, key))
+                {
+                  CacheEntry *entry = map->entries[pos];
+                  map->mask[pos] = false;
+                  map->hashes[pos] = 0;
+                  map->entries[pos] = NULL;
+                  atomic_fetch_sub (&map->nmemb, 1);
+                  UNLOCK_SLOT (map, pos);
+                  return entry; // Caller now owns entry lock
+                }
+              UNLOCK_ENTRY (map->entries[pos]);
+            }
+        }
+      UNLOCK_SLOT (map, pos);
+      ++pos;
+      if (pos >= MAX_NUM_CACHE_ENTRIES)
+        pos = 0;
+    }
+  while (pos != slot);
+
+  return NULL;
+}
+
 bool
 set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
                         CacheEntry **old_entry)
@@ -146,7 +203,8 @@ set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
               if (occupant == entry)
                 {
 #if DEBUG
-                  printf ("ALREADY SET \"%.*s\"\n", entry->key.nmemb, entry->key.base);
+                  fprintf (stderr, "ALREADY SET \"%.*s\"\n",
+                           entry->key.nmemb, entry->key.base);
 #endif
                   UNLOCK_SLOT (map, pos);
                   return true;

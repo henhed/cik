@@ -125,7 +125,7 @@ server_accept ()
       return errno;
     }
 
-  debug_print_client (client);
+  /* debug_print_client (client); */
 
   return 0;
 }
@@ -258,12 +258,42 @@ handle_set_request (Client *client, Request *request)
 
   if (old_entry)
     {
-      // @Revisit: Should we tell memory explicitly that this entry is reusable?
-      old_entry->expiry = 0;
       UNLOCK_ENTRY (old_entry);
+      release_memory (old_entry);
     }
 
   UNLOCK_ENTRY (entry);
+
+  return STATUS_OK;
+}
+
+static StatusCode
+handle_del_request (Client *client, Request *request)
+{
+  PROFILE (PROF_HANDLE_DEL_REQUEST);
+
+  StatusCode status;
+  CacheEntry *entry = NULL;
+
+  u8 tmp_key_data[0xFF];
+  CacheKey key = {
+    .base = tmp_key_data,
+    .nmemb = request->d.klen
+  };
+
+  // Read key
+  status = read_request_payload (client, key.base, key.nmemb);
+  if (status != STATUS_OK)
+    return status;
+
+  // Unmap entry
+  entry = lock_and_unset_cache_entry (entry_map, key);
+  if (!entry)
+    return STATUS_NOT_FOUND;
+
+  // Release memory
+  UNLOCK_ENTRY (entry);
+  release_memory (entry);
 
   return STATUS_OK;
 }
@@ -291,6 +321,8 @@ handle_request (Client *client, Request *request, Payload **response_payload)
       request->s.vlen = ntohl (request->s.vlen);
       request->s.ttl  = ntohl (request->s.ttl);
       return handle_set_request (client, request);
+    case CMD_BYTE_DEL:
+      return handle_del_request (client, request);
     default:
       return STATUS_PROTOCOL_ERROR;
     }
@@ -337,8 +369,12 @@ server_read ()
           status = read_request (client, &request);
           if (status & MASK_INTERNAL_ERROR)
             {
-              fprintf (stderr, "%s: (FD %d) %s [%s]\n", __FUNCTION__,
-                       client->fd, get_status_code_name (status), strerror (errno));
+              if (status != STATUS_CONNECTION_CLOSED)
+                {
+                  fprintf (stderr, "%s: (FD %d) %s [%s]\n", __FUNCTION__,
+                           client->fd, get_status_code_name (status),
+                           strerror (errno));
+                }
               close_client (client);
               continue;
             }
@@ -468,8 +504,6 @@ close_client (Client *client)
 
   if (!client || (client->fd < 0))
     return;
-  printf ("%s: ", __FUNCTION__);
-  debug_print_client (client);
   close (client->fd);
   client->fd = -1;
 }
