@@ -8,8 +8,9 @@
 #include <threads.h>
 #include <unistd.h>
 
-#include "entry.h"
 #include "memory.h"
+#include "entry.h"
+#include "tag.h"
 #include "server.h"
 #include "profiler.h"
 
@@ -85,6 +86,7 @@ main (int argc, char **argv)
           rewind (info_file);
           debug_print_profilers (info_fd);
           debug_print_memory (info_fd);
+          debug_print_tags (info_fd);
         }
     }
 

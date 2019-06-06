@@ -11,6 +11,7 @@
 #include "server.h"
 #include "memory.h"
 #include "entry.h"
+#include "tag.h"
 #include "profiler.h"
 
 #if DEBUG
@@ -272,6 +273,12 @@ handle_set_request (Client *client, Request *request)
       UNLOCK_ENTRY (old_entry);
       release_memory (old_entry);
     }
+
+#if DEBUG
+  assert (MAX_NUM_TAGS_PER_ENTRY == 3);
+#endif
+  for (u8 i = 0; i < MAX_NUM_TAGS_PER_ENTRY; ++i)
+    associate_key_with_tag (entry->tags[i], entry->key);
 
   UNLOCK_ENTRY (entry);
 
