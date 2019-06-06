@@ -120,9 +120,17 @@ class CiK //implements Zend_Cache_Backend_Interface
             $tags,
             $specificLifetime === false ? null : (int) $specificLifetime
         );
-        $success = $this->writeMessage($message);
-        $success = ($success && ('' === $this->readMessage()));
-        return $success;
+        if (!$this->writeMessage($message)) {
+            return false;
+        }
+        try {
+            return ('' === $this->readMessage());
+        } catch (\Exception $e) {
+            if ($e->getCode() & self::MASK_CLIENT_MESSAGE) {
+                return false; // Not an actual error
+            }
+            throw $e;
+        }
     }
 
     public function remove(string $id): bool
@@ -135,7 +143,7 @@ class CiK //implements Zend_Cache_Backend_Interface
             return ('' === $this->readMessage());
         } catch (\Exception $e) {
             if ($e->getCode() & self::MASK_CLIENT_MESSAGE) {
-                return false; // Not an actual error
+                return true; // Not an actual error
             }
             throw $e;
         }
@@ -331,8 +339,16 @@ $success = $cik->save(
 
 var_dump($success);
 
+echo 'Test the set entry';
+$success = $cik->load('A message from our sponsors') == 'Buy our stuff';
+var_dump($success);
+
 echo 'Remove the same entry';
 $success = $cik->remove('A message from our sponsors');
+var_dump($success);
+
+echo 'Test the set entry again';
+$success = $cik->load('A message from our sponsors') == 'Buy our stuff';
 var_dump($success);
 
 echo 'Remove a non-existent entry';
@@ -350,6 +366,7 @@ var_dump($success);
 
 // var_dump($success);
 
+echo 'Set one more entry';
 $success = $cik->save(
     'Buy our stuff',
     'A message from our sponsors, take #2',
@@ -360,7 +377,6 @@ $success = $cik->save(
     ],
     10
 );
-
 var_dump($success);
 
 var_dump(date('Y-m-d H:i:s'));

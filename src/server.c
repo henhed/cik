@@ -239,6 +239,7 @@ handle_set_request (Client *client, Request *request)
   if (status != STATUS_OK)
     {
       UNLOCK_ENTRY (entry);
+      release_memory (entry);
       return status;
     }
 
@@ -254,7 +255,17 @@ handle_set_request (Client *client, Request *request)
   if (ttl != (u32) -1)
     entry->expiry = time (NULL) + ttl;
 
-  set_locked_cache_entry (entry_map, entry, &old_entry);
+  if (!set_locked_cache_entry (entry_map, entry, &old_entry))
+    {
+#if DEBUG
+      assert (old_entry == NULL);
+      fprintf (stderr, "%s: TODO: Evict something (%.*s)\n", __FUNCTION__,
+               entry->key.nmemb, entry->key.base);
+#endif
+      UNLOCK_ENTRY (entry);
+      release_memory (entry);
+      return STATUS_OUT_OF_MEMORY;
+    }
 
   if (old_entry)
     {
@@ -291,9 +302,15 @@ handle_del_request (Client *client, Request *request)
   if (!entry)
     return STATUS_NOT_FOUND;
 
-  // Release memory
-  UNLOCK_ENTRY (entry);
-  release_memory (entry);
+  do
+    {
+      // Release memory. We loop untill we get NULL back from map. See note
+      // about @Bug in `set_locked_cache_entry'.
+      UNLOCK_ENTRY (entry);
+      release_memory (entry);
+      entry = lock_and_unset_cache_entry (entry_map, key);
+    }
+  while (entry != NULL);
 
   return STATUS_OK;
 }

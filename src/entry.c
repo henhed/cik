@@ -179,10 +179,14 @@ set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
 
   if (atomic_load (&map->nmemb) >= MAX_NUM_CACHE_ENTRIES)
     {
+      if (old_entry == NULL)
+        {
+          // We refuse to overwrite existing entries if caller won't take care of it
 #if DEBUG
-      fprintf (stderr, "[%s] We're full!\n", __FUNCTION__);
+          fprintf (stderr, "[%s] We're full!\n", __FUNCTION__);
 #endif
-      return false;
+          return false;
+        }
     }
 
   hash = get_key_hash (entry->key);
@@ -229,13 +233,30 @@ set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
 #if DEBUG
                       assert (*old_entry != entry);
 #endif
-                      // If caller wants the old entry they are responsible for unlocking
+                      // If caller wants the old entry they are responsible for
+                      // unlocking it
                       *old_entry = occupant;
+                      found = true;
+                      break; // slot is still locked
                     }
                   else
-                    UNLOCK_ENTRY (occupant);
-                  found = true;
-                  break; // slot is still locked
+                    {
+                      // If caller doesn't want the old entry we reject the new one.
+                      // We don't want duplicate keys. There is a @Bug here though;
+                      // since the same key can get different pos'es depending on
+                      // what else is currently in the map we /can/ get duplicate
+                      // keys. But in that case the most recently added entry will
+                      // be closest to the initially calculated pos and hence
+                      // matched before the older duplicate. This inconsistency has
+                      // to be handled in a higher layer for now.
+                      // Ensuring consistency here would impact @Speed
+                      UNLOCK_ENTRY (occupant);
+                      UNLOCK_SLOT (map, pos);
+#if DEBUG
+                      assert (false); // This case is untested
+#endif
+                      break;
+                    }
                 }
               UNLOCK_ENTRY (occupant);
             }
