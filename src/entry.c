@@ -61,7 +61,6 @@ lock_and_get_cache_entry (CacheEntryHashMap *map, CacheKey key)
 #if DEBUG
   assert (map);
   assert (key.base);
-  assert (key.nmemb > 0);
 #endif
 
   hash = get_key_hash (key);
@@ -113,7 +112,6 @@ lock_and_unset_cache_entry (CacheEntryHashMap *map, CacheKey key)
 #if DEBUG
   assert (map);
   assert (key.base);
-  assert (key.nmemb > 0);
 #endif
 
   hash = get_key_hash (key);
@@ -172,9 +170,7 @@ set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
 #if DEBUG
   assert (map);
   assert (entry->key.base);
-  assert (entry->key.nmemb > 0);
   assert (entry->value.base);
-  assert (entry->value.nmemb > 0);
 #endif
 
   if (atomic_load (&map->nmemb) >= MAX_NUM_CACHE_ENTRIES)

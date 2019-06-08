@@ -7,6 +7,15 @@ namespace Improove;
 ini_set('display_errors', '1');
 ini_set('error_reporting', (string) (E_ALL | E_STRICT));
 
+class Zend_Cache
+{
+    const CLEANING_MODE_ALL              = 'all';
+    const CLEANING_MODE_OLD              = 'old';
+    const CLEANING_MODE_MATCHING_TAG     = 'matchingTag';
+    const CLEANING_MODE_NOT_MATCHING_TAG = 'notMatchingTag';
+    const CLEANING_MODE_MATCHING_ANY_TAG = 'matchingAnyTag';
+}
+
 class CiK //implements Zend_Cache_Backend_Interface
 {
 
@@ -19,6 +28,7 @@ class CiK //implements Zend_Cache_Backend_Interface
     const CMD_BYTE_GET   = 0x67; // 'g'
     const CMD_BYTE_SET   = 0x73; // 's'
     const CMD_BYTE_DEL   = 0x64; // 'd'
+    const CMD_BYTE_CLR   = 0x63; // 'c'
     /**#@-*/
 
     /**#@+
@@ -149,17 +159,42 @@ class CiK //implements Zend_Cache_Backend_Interface
         }
     }
 
-    public function clean(string $mode = 'all', array $tags = []): bool
+    public function clean($mode = Zend_Cache::CLEANING_MODE_ALL, $tags = [])
     {
-        throw new \Exception(__METHOD__ . ' not implmented');
+        $modeMap = [
+            Zend_Cache::CLEANING_MODE_ALL              => 0x00,
+            Zend_Cache::CLEANING_MODE_OLD              => 0x01,
+            Zend_Cache::CLEANING_MODE_MATCHING_TAG     => 0x02,
+            Zend_Cache::CLEANING_MODE_NOT_MATCHING_TAG => 0x03,
+            Zend_Cache::CLEANING_MODE_MATCHING_ANY_TAG => 0x04
+        ];
+        if (!isset($modeMap[$mode])) {
+            Zend_Cache::throwException('Invalid mode for clean() method');
+        }
+        $message = $this->makeClrMessage($modeMap[$mode], $tags);
+        var_dump($message);
+        if (!$this->writeMessage($message)) {
+            return false;
+        }
+        $response = $this->readMessage();
+        var_dump($response);
+        return true;
     }
 
     private function formatKey(string $key): string
     {
         if (strlen($key) > 0xFF) {
-            return sha1($key);
+            return hash('sha512', $key, false);
         }
         return $key;
+    }
+
+    private function formatTag(string $tag): string
+    {
+        if (strlen($tag) > 0xFF) {
+            return hash('sha512', $tag, false);
+        }
+        return $tag;
     }
 
     private function makeGetMessage(string $key, bool $ignoreExpiry): string
@@ -207,9 +242,9 @@ class CiK //implements Zend_Cache_Backend_Interface
         $key  = $this->formatKey($key);
         $klen = strlen($key);
         $vlen = strlen($value);
-        $tag0 = array_shift($tags);
-        $tag1 = array_shift($tags);
-        $tag2 = array_shift($tags); // We support at most 3 tags
+        $tag0 = $this->formatTag((string) array_shift($tags));
+        $tag1 = $this->formatTag((string) array_shift($tags));
+        $tag2 = $this->formatTag((string) array_shift($tags));
         $head = pack(
             'c3cCC3NN',
             self::CONTROL_BYTE_1,
@@ -246,6 +281,40 @@ class CiK //implements Zend_Cache_Backend_Interface
             $klen
         );
         return $head . $key;
+    }
+
+    private function makeClrMessage($mode, $tags = [])
+    {
+        // :CLR
+        // Size         Offset          Value
+        // char[3]      0               'CiK' (Sanity)
+        // char         3               'c'   (OP code)
+        // u8           4               mode
+        // u8           5               num tags
+        // u8[10]       6               Padding
+        // void *       10              (tags)
+        $tags = array_filter($tags);
+        $tags = array_unique($tags);
+        $tags = array_slice($tags, 0, 0xFF);
+        $head = pack(
+            'c3cCC@16',
+            self::CONTROL_BYTE_1,
+            self::CONTROL_BYTE_2,
+            self::CONTROL_BYTE_3,
+            self::CMD_BYTE_CLR,
+            (int) $mode,
+            count($tags)
+        );
+        return $head . $this->makeTagMessage($tags);
+    }
+
+    private function makeTagMessage($tag)
+    {
+        if (is_array($tag)) {
+            return implode('', array_map([$this, 'makeTagMessage'], $tag));
+        }
+        $tag = $this->formatTag($tag);
+        return pack('C', strlen($tag)) . $tag;
     }
 
     private function writeMessage(string $message): bool
@@ -337,7 +406,37 @@ $success = $cik->save(
     10
 );
 
+$success = $cik->save(
+    'Buy our stuff',
+    'Another message',
+    [
+        'catalog_product_14',
+        'store_1',
+        'CONFIG'
+    ],
+    10
+);
+
+$success = $cik->save(
+    'Buy our stuff',
+    'A third message',
+    [
+        'catalog_product_15',
+        'store_2',
+        'CONFIG'
+    ],
+    10
+);
+
 var_dump($success);
+
+$cik->clean(Zend_Cache::CLEANING_MODE_MATCHING_TAG, [
+    'store_1',
+    'CONFIG',
+    str_repeat('abc', 100)
+]);
+
+die;
 
 echo 'Test the set entry';
 $success = $cik->load('A message from our sponsors') == 'Buy our stuff';
@@ -373,7 +472,7 @@ $success = $cik->save(
     [
         'catalog_product_13',
         'store_1',
-        'CONFIG...'
+        ''
     ],
     10
 );

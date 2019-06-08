@@ -67,6 +67,15 @@ typedef struct
 
 typedef enum
 {
+  CLEAR_MODE_ALL        = 0x00,
+  CLEAR_MODE_OLD        = 0x01,
+  CLEAR_MODE_MATCH_ALL  = 0x02,
+  CLEAR_MODE_MATCH_NONE = 0x03,
+  CLEAR_MODE_MATCH_ANY  = 0x04
+} ClearMode;
+
+typedef enum
+{
   // 0x00 Series: Generates a sucess response
   STATUS_OK                     = 0x00,
 
@@ -111,7 +120,9 @@ get_status_code_name (StatusCode code)
 // PROTOCOL
 //
 
-// GET
+// Size         Offset          Value
+
+// :GET
 // char[3]      0               'CiK' (Sanity)
 // char         3               'g'   (OP code)
 // u8           4               Key length
@@ -119,7 +130,7 @@ get_status_code_name (StatusCode code)
 // u8[10]       6               Padding
 // ..data       16              (key)
 
-// SET
+// :SET
 // char[3]      0               'CiK' (Sanity)
 // char         3               's'   (OP code)
 // u8           4               Key length
@@ -130,6 +141,21 @@ get_status_code_name (StatusCode code)
 // u32          12              TTL in seconds
 // ..data       16              (key + tags + value)
 
+// :DEL
+// char[3]      0               'CiK' (Sanity)
+// char         3               'd'   (OP code)
+// u8           4               Key length
+// u8[11]       6               Padding
+// void *       16              (key)
+
+// :CLR
+// char[3]      0               'CiK' (Sanity)
+// char         3               'c'   (OP code)
+// u8           4               ClearMode
+// u8           5               num tags
+// u8[10]       6               Padding
+// void *       10              (tags)
+
 #define CONTROL_BYTE_1 0x43 // 'C'
 #define CONTROL_BYTE_2 0x69 // 'i'
 #define CONTROL_BYTE_3 0x4B // 'K'
@@ -137,7 +163,6 @@ get_status_code_name (StatusCode code)
 #define CMD_BYTE_SET   0x73 // 's'
 #define CMD_BYTE_DEL   0x64 // 'd'
 #define CMD_BYTE_CLR   0x63 // 'c'
-#define CMD_BYTE_PRG   0x70 // 'p'
 #define SUCCESS_BYTE   0x74 // 't'
 #define FAILURE_BYTE   0x66 // 'f'
 
@@ -168,6 +193,12 @@ typedef struct __attribute__((packed))
       u8 klen;
       u8 _padding[11];
     } d;
+    struct __attribute__((packed))
+    {
+      u8 mode;
+      u8 ntags;
+      u8 _padding[10];
+    } c;
   };
 } Request;
 
@@ -183,6 +214,9 @@ typedef struct __attribute__((packed))
    && (sizeof (request.s.vlen) == 4)            \
    && (sizeof (request.d.klen) == 1)            \
    && (sizeof (request.d._padding) == 11)       \
+   && (sizeof (request.c.mode) == 1)            \
+   && (sizeof (request.c.ntags) == 1)           \
+   && (sizeof (request.c._padding) == 10)       \
    && (offsetof (Request, cik) == 0)            \
    && (offsetof (Request, op) == 3)             \
    && (offsetof (Request, g.klen) == 4)         \
@@ -193,6 +227,9 @@ typedef struct __attribute__((packed))
    && (offsetof (Request, s.vlen) == 8)         \
    && (offsetof (Request, d.klen) == 4)         \
    && (offsetof (Request, d._padding) == 5)     \
+   && (offsetof (Request, c.mode) == 4)         \
+   && (offsetof (Request, c.ntags) == 5)        \
+   && (offsetof (Request, c._padding) == 6)     \
    )
 
 typedef struct __attribute__((packed))

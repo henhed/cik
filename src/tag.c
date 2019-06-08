@@ -137,17 +137,41 @@ associate_key_with_tag (CacheTag tag, CacheKey key)
   TagNode *node = get_or_create_node (&root, tag);
 #if DEBUG
   assert (node != NULL);
-  if (insert_if_unique (&node->keys, key))
-    printf ("%s: '%.*s' < '%.*s'\n", __FUNCTION__,
-            tag.nmemb, tag.base, key.nmemb, key.base);
-#else
-  insert_if_unique (&node->keys, key);
+  /* if (insert_if_unique (&node->keys, key)) */
+  /*   printf ("%s: '%.*s' < '%.*s'\n", __FUNCTION__, */
+  /*           tag.nmemb, tag.base, key.nmemb, key.base); */
 #endif
+  insert_if_unique (&node->keys, key);
+}
+
+void
+clear_entries_matching_all_tags (CacheTag *tags, u8 ntags)
+{
+  (void) tags;
+  (void) ntags;
+  fprintf (stderr, "%s: NOT IMPLEMENTED\n", __FUNCTION__);
+}
+
+void
+clear_entries_matching_any_tag (CacheTag *tags, u8 ntags)
+{
+  (void) tags;
+  (void) ntags;
+  fprintf (stderr, "%s: NOT IMPLEMENTED\n", __FUNCTION__);
+}
+
+void
+clear_entries_not_matching_any_tag (CacheTag *tags, u8 ntags)
+{
+  (void) tags;
+  (void) ntags;
+  fprintf (stderr, "%s: NOT IMPLEMENTED\n", __FUNCTION__);
 }
 
 static void
 debug_print_tag (int fd, TagNode *node, u32 depth)
 {
+  u32 nentries = 0;
   dprintf (fd, "%*s'%.*s'\n",
            depth * 2,
            "* ",
@@ -155,12 +179,34 @@ debug_print_tag (int fd, TagNode *node, u32 depth)
            node->tag.base);
   for (KeyNode **list = &node->keys; *list != NULL; list = &(*list)->next)
     {
-      dprintf (fd, "%*s'%.*s'\n",
-               (depth + 1) * 2,
-               "- ",
-               (*list)->key.nmemb,
-               (*list)->key.base);
+      if (++nentries < 3)
+        dprintf (fd, "%*s'%.*s'\n",
+                 (depth + 1) * 2,
+                 "- ",
+                 (*list)->key.nmemb,
+                 (*list)->key.base);
     }
+  if (nentries > 2)
+    dprintf (fd, "%*s %u more ..\n",
+             (depth + 1) * 2,
+             "- ",
+             nentries - 2);
+  /* u32 nentries = 0; */
+  /* dprintf (fd, "%*s'%.*s'", */
+  /*          depth * 2, */
+  /*          "* ", */
+  /*          node->tag.nmemb, */
+  /*          node->tag.base); */
+  /* for (KeyNode **list = &node->keys; *list != NULL; list = &(*list)->next) */
+  /*   { */
+  /*     if (++nentries < 2) */
+  /*       dprintf (fd, " => '%.*s'", */
+  /*                (*list)->key.nmemb, */
+  /*                (*list)->key.base); */
+  /*   } */
+  /* if (nentries > 2) */
+  /*   dprintf (fd, " (+ %u more)", nentries); */
+  /* dprintf (fd, "\n"); */
   if (node->left)
     debug_print_tag (fd, node->left, depth + 1);
   if (node->right)

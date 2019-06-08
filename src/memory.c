@@ -99,7 +99,7 @@ init_memory ()
 
   entry_map = memory_cursor;
   memory_cursor += sizeof (CacheEntryHashMap);
-  /* assert (((intptr_t) memory_cursor % alignof (max_align_t)) == 0); */
+  assert (((intptr_t) memory_cursor % alignof (max_align_t)) == 0);
 
   // Make sure all allocations are accounted for
   assert ((size_t) (memory_cursor - main_memory) == total_memory_size);
@@ -233,13 +233,23 @@ void
 debug_print_memory (int fd)
 {
   dprintf (fd, "Memory buckets:\n");
-  dprintf (fd, "%-12s%-12s%-12s%-12s\n", "Size", "Capacity", "Members", "Usage%");
+  dprintf (fd, "%-12s%-12s%-12s%-12s\n", "Item Size", "Capacity", "Members", "Usage%");
+
+  static u32 kb = 1024;
+  static u32 mb = 1024 * 1024;
 
   for (u32 b = 0; b < num_buckets; ++b)
     {
       Bucket *bucket = &buckets[b];
-      dprintf (fd, "0x%-10X0x%-10X0x%-10X%-12.2f\n",
-               bucket->size, bucket->cap, bucket->nmemb,
+      dprintf (fd, "%8u%s %10u %10u %10.2f\n",
+               ((bucket->size >= mb)
+                ? (bucket->size / mb)
+                : (bucket->size >= kb ? (bucket->size / kb) : bucket->size)),
+               ((bucket->size >= mb)
+                ? "M"
+                : (bucket->size >= kb ? "K" : "B")),
+               bucket->cap,
+               bucket->nmemb,
                100.f * ((float) bucket->nmemb / bucket->cap));
     }
 

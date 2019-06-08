@@ -131,8 +131,21 @@ server_accept ()
   return 0;
 }
 
-static thread_local u32     the_payload_cap = 0;
-static thread_local Payload the_payload     = { .base = NULL, .nmemb = 0 };
+static thread_local u32     payload_buffer_cap = 0;
+static thread_local Payload payload_buffer     = { .base = NULL, .nmemb = 0 };
+
+static StatusCode
+init_payload_buffer ()
+{
+  if (payload_buffer.base == NULL)
+    {
+      if (!reserve_biggest_possible_payload (&payload_buffer))
+        return STATUS_OUT_OF_MEMORY;
+      // We may overwrite nmemb later so we save initial value here
+      payload_buffer_cap = payload_buffer.nmemb;
+    }
+  return STATUS_OK;
+}
 
 static StatusCode
 handle_get_request (Client *client, Request *request, Payload **response_payload)
@@ -148,13 +161,9 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
   CacheKey key;
   u8 tmp_key_data[0xFF];
 
-  if (the_payload.base == NULL)
-    {
-      if (!reserve_biggest_possible_payload (&the_payload))
-        return STATUS_OUT_OF_MEMORY;
-      // We overwrite nmemb below so we save initial value here
-      the_payload_cap = the_payload.nmemb;
-    }
+  status = init_payload_buffer ();
+  if (status != STATUS_OK)
+    return status;
 
   // Read key
   status = read_request_payload (client, tmp_key_data, klen);
@@ -181,14 +190,17 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
         }
     }
 
-  if (entry->value.nmemb > the_payload_cap)
+  if (entry->value.nmemb > payload_buffer_cap)
     return STATUS_BUG; // We should always have a buffer big enough
 
-  // We copy the entry value to a payload buffer so we don't have to keep
-  // the entity locked while writing it's data to the client.
-  the_payload.nmemb = entry->value.nmemb;
-  memcpy (the_payload.base, entry->value.base, the_payload.nmemb);
-  *response_payload = &the_payload;
+  if (entry->value.nmemb > 0)
+    {
+      // We copy the entry value to a payload buffer so we don't have to keep
+      // the entity locked while writing it's data to the client.
+      payload_buffer.nmemb = entry->value.nmemb;
+      memcpy (payload_buffer.base, entry->value.base, payload_buffer.nmemb);
+      *response_payload = &payload_buffer;
+    }
 
   UNLOCK_ENTRY (entry);
 
@@ -223,6 +235,10 @@ handle_set_request (Client *client, Request *request)
   // in the hash table already. If so, reuse it's memory if possible.
   // Right now we're always reserving new memory and releasing the old.
   // But who knows, maybe reserving new memory will be faster in the end.
+
+  // @Speed: Both keys and tags tend to be prefixed and so in general they
+  // should have more entropy at near end. If we store keys and tags in reverse
+  // byte order we should help memcpy to exit early.
 
   entry = reserve_and_lock_entry (total_size);
   if (entry == NULL)
@@ -278,7 +294,12 @@ handle_set_request (Client *client, Request *request)
   assert (MAX_NUM_TAGS_PER_ENTRY == 3);
 #endif
   for (u8 i = 0; i < MAX_NUM_TAGS_PER_ENTRY; ++i)
-    associate_key_with_tag (entry->tags[i], entry->key);
+    {
+      if (entry->tags[i].nmemb > 0)
+        associate_key_with_tag (entry->tags[i], entry->key);
+      else
+        break;
+    }
 
   UNLOCK_ENTRY (entry);
 
@@ -323,6 +344,63 @@ handle_del_request (Client *client, Request *request)
 }
 
 static StatusCode
+handle_clr_request (Client *client, Request *request)
+{
+  PROFILE (PROF_HANDLE_CLR_REQUEST);
+
+  StatusCode status;
+  u8 mode  = request->c.mode;
+  u8 ntags = request->c.ntags;
+  CacheTag tags[ntags];
+  u8 *buffer;
+  u32 buffer_cap;
+
+  status = init_payload_buffer ();
+  if (status != STATUS_OK)
+    return status;
+
+  buffer = payload_buffer.base;
+  buffer_cap = payload_buffer_cap;
+
+  for (u8 t = 0; t < ntags; ++t)
+    {
+      CacheTag *tag = &tags[t];
+      status = read_request_payload (client, &tag->nmemb, sizeof (tag->nmemb));
+      if (status != STATUS_OK)
+        return status;
+      if (tag->nmemb > buffer_cap)
+        return STATUS_OUT_OF_MEMORY; // @Cleanup: Drain input stream
+      status = read_request_payload (client, buffer, tag->nmemb);
+      if (status != STATUS_OK)
+        return status;
+      tag->base = buffer;
+      buffer += tag->nmemb;
+      buffer_cap -= tag->nmemb;
+    }
+
+  switch (mode)
+    {
+    case CLEAR_MODE_ALL:
+      return STATUS_BUG;
+    case CLEAR_MODE_OLD:
+      return STATUS_BUG;
+    case CLEAR_MODE_MATCH_ALL:
+      clear_entries_matching_all_tags (tags, ntags);
+      return STATUS_OK;
+    case CLEAR_MODE_MATCH_NONE:
+      clear_entries_not_matching_any_tag (tags, ntags);
+      return STATUS_OK;
+    case CLEAR_MODE_MATCH_ANY:
+      clear_entries_matching_any_tag (tags, ntags);
+      return STATUS_OK;
+    default:
+      return STATUS_PROTOCOL_ERROR;
+    }
+
+  return STATUS_OK;
+}
+
+static StatusCode
 handle_request (Client *client, Request *request, Payload **response_payload)
 {
   PROFILE (PROF_HANDLE_REQUEST);
@@ -347,6 +425,8 @@ handle_request (Client *client, Request *request, Payload **response_payload)
       return handle_set_request (client, request);
     case CMD_BYTE_DEL:
       return handle_del_request (client, request);
+    case CMD_BYTE_CLR:
+      return handle_clr_request (client, request);
     default:
       return STATUS_PROTOCOL_ERROR;
     }
@@ -395,7 +475,7 @@ server_read ()
             {
               if (status != STATUS_CONNECTION_CLOSED)
                 {
-                  fprintf (stderr, "%s: (FD %d) %s [%s]\n", __FUNCTION__,
+                  fprintf (stderr, "%s:%d (FD %d) %s [%s]\n", __FUNCTION__, __LINE__,
                            client->fd, get_status_code_name (status),
                            strerror (errno));
                 }
@@ -407,7 +487,7 @@ server_read ()
           status = handle_request (client, &request, &payload);
           if (status & MASK_INTERNAL_ERROR)
             {
-              fprintf (stderr, "%s: (FD %d) %s [%s]\n", __FUNCTION__,
+              fprintf (stderr, "%s:%d (FD %d) %s [%s]\n", __FUNCTION__, __LINE__,
                        client->fd, get_status_code_name (status), strerror (errno));
               close_client (client);
               continue;
@@ -429,18 +509,18 @@ server_read ()
           status = write_response (client, &response);
           if (status & MASK_INTERNAL_ERROR)
             {
-              fprintf (stderr, "%s: (FD %d) %s [%s]\n", __FUNCTION__,
+              fprintf (stderr, "%s:%d (FD %d) %s [%s]\n", __FUNCTION__, __LINE__,
                        client->fd, get_status_code_name (status), strerror (errno));
               close_client (client);
               continue;
             }
 
-          if (payload != NULL)
+          if ((payload != NULL) && (payload->nmemb > 0))
             {
               status = write_response_payload (client, payload->base, payload->nmemb);
               if (status & MASK_INTERNAL_ERROR)
                 {
-                  fprintf (stderr, "%s: (FD %d) %s [%s]\n", __FUNCTION__,
+                  fprintf (stderr, "%s:%d (FD %d) %s [%s]\n", __FUNCTION__, __LINE__,
                            client->fd, get_status_code_name (status), strerror (errno));
                   close_client (client);
                   continue;
@@ -476,6 +556,9 @@ read_request_payload (Client *client, u8 *base, u32 nmemb)
   assert (base);
 #endif
 
+  if (nmemb == 0)
+    return STATUS_OK;
+
   do
     {
       nread = read (client->fd, base, remaining_size);
@@ -505,6 +588,9 @@ write_response_payload (Client *client, u8 *base, u32 nmemb)
   assert (client);
   assert (base);
 #endif
+
+  if (nmemb == 0)
+    return STATUS_OK;
 
   do
     {

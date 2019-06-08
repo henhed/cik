@@ -24,6 +24,7 @@ static const char *profiler_names[NUM_PROFILERS] = {
   [PROF_HANDLE_GET_REQUEST] = "handle_get_request",
   [PROF_HANDLE_SET_REQUEST] = "handle_set_request",
   [PROF_HANDLE_DEL_REQUEST] = "handle_del_request",
+  [PROF_HANDLE_CLR_REQUEST] = "handle_clr_request",
   [PROF_HANDLE_REQUEST]     = "handle_request",
   [PROF_SERVER_READ]        = "server_read",
   [PROF_CLOSE_CLIENT]       = "close_client"
@@ -89,7 +90,7 @@ debug_print_profilers (int fd)
 {
   float to_seconds = 1.f / (float) get_performance_frequency ();
 
-  dprintf (fd, "%-20s:%-12s%-12s%-12s\n", "Name", "Count", "Total Cost", "Self Cost");
+  dprintf (fd, "%-20s%-12s%-12s%-12s\n", "Name", "Count", "Total Cost", "Self Cost");
 
   for (Profiler p = PROF_MAIN + 1; p < NUM_PROFILERS; ++p)
     {
@@ -98,7 +99,7 @@ debug_print_profilers (int fd)
       u64 count = data->num_invocations;
       float total_cost = (float) data->total_num_ticks * to_seconds;
       float self_cost  = (float) data->total_self_cost * to_seconds;
-      dprintf (fd, "%-20s:%-12lu%-12.2f%-12.2f\n", name, count, total_cost, self_cost);
+      dprintf (fd, "%-20s%-12lu%-12.2f%-12.2f\n", name, count, total_cost, self_cost);
     }
 
   dprintf (fd, "------------------------------------------------------\n");

@@ -12,13 +12,13 @@
 #define MAX_BUCKET_SIZE        0x800000 //  8 Megabytes
 #define MAX_BUCKET_ENTRY_COUNT 0x40000   // 256 K
 
-/* #define MAX_NUM_CACHE_ENTRIES 823117 */
-#define MAX_NUM_CACHE_ENTRIES 23
+#define MAX_NUM_CACHE_ENTRIES 823117
+/* #define MAX_NUM_CACHE_ENTRIES 23 */
 #define MAX_NUM_TAGS_PER_ENTRY 3 // This is hard coded in the spec
 
 #define SERVER_PORT 5555
-#define SERVER_BACKLOG 5
-#define MAX_NUM_CLIENTS 3
-#define MAX_NUM_EVENTS 3
+#define SERVER_BACKLOG 0xFF
+#define MAX_NUM_CLIENTS 0xFF
+#define MAX_NUM_EVENTS 0xFF
 
 #endif /* ! CONFIG_H */
