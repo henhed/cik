@@ -45,6 +45,22 @@ typedef struct
   u32 nmemb;
 } Payload;
 
+// Linked list
+typedef struct _KeyNode
+{
+  CacheKey key;
+  struct _KeyNode *next;
+} KeyNode;
+
+// Binary tree
+typedef struct _TagNode
+{
+  CacheTag tag;
+  KeyNode *keys;
+  struct _TagNode *left;
+  struct _TagNode *right;
+} TagNode;
+
 typedef CacheTag CacheTagList[MAX_NUM_TAGS_PER_ENTRY];
 
 typedef struct

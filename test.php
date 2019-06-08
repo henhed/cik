@@ -430,10 +430,9 @@ $success = $cik->save(
 
 var_dump($success);
 
-$cik->clean(Zend_Cache::CLEANING_MODE_MATCHING_TAG, [
+$cik->clean(Zend_Cache::CLEANING_MODE_MATCHING_ANY_TAG, [
     'store_1',
     'CONFIG',
-    str_repeat('abc', 100)
 ]);
 
 die;

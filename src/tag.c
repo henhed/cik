@@ -8,22 +8,6 @@
 # include <assert.h>
 #endif
 
-// Linked list
-typedef struct _KeyNode
-{
-  CacheKey key;
-  struct _KeyNode *next;
-} KeyNode;
-
-// Binary tree
-typedef struct _TagNode
-{
-  CacheTag tag;
-  KeyNode *keys;
-  struct _TagNode *left;
-  struct _TagNode *right;
-} TagNode;
-
 static u8 root_value = 0x4F; // Midddle of ASCII printable characters
 static TagNode root = {
   .tag.base = &root_value,
@@ -42,6 +26,21 @@ keys_are_equal (CacheKey a, CacheKey b)
   return (0 == memcmp (a.base, b.base, a.nmemb));
 }
 
+static KeyNode *
+create_key_node (CacheKey key)
+{
+  KeyNode *node;
+  node = reserve_memory (sizeof (KeyNode) + (sizeof (u8) * key.nmemb));
+  if (node)
+    {
+      *node = (KeyNode) { 0 };
+      node->key.base = (u8 *) (node + 1);
+      node->key.nmemb = key.nmemb;
+      memcpy (node->key.base, key.base, key.nmemb);
+    }
+  return node;
+}
+
 static bool
 insert_if_unique (KeyNode **list, CacheKey key)
 {
@@ -56,15 +55,19 @@ insert_if_unique (KeyNode **list, CacheKey key)
         return false;
     }
 
-  node = reserve_memory (sizeof (KeyNode) + (sizeof (u8) * key.nmemb));
-  *node = (KeyNode) { 0 };
-  node->key.base = (u8 *) (node + 1);
-  node->key.nmemb = key.nmemb;
-  memcpy (node->key.base, key.base, key.nmemb);
-  node->next = *list;
-  *list = node;
+  node = create_key_node (key);
+#if DEBUG
+  assert (node != NULL);
+#endif
 
-  return true;
+  if (node != NULL)
+    {
+      node->next = *list;
+      *list = node;
+      return true;
+    }
+
+  return false;
 }
 
 static int
@@ -130,6 +133,40 @@ get_or_create_node (TagNode *parent, CacheTag tag)
   return NULL;
 }
 
+static KeyNode *
+get_keys_by_tag (CacheTag tag)
+{
+  TagNode *current = &root;
+
+  while (current)
+    {
+      int diff = compare_tags (tag, current->tag);
+      if (diff == 0)
+        return current->keys;
+
+      if (diff < 0)
+        current = current->left;
+      else
+        current = current->right;
+    }
+
+  return NULL;
+}
+
+static KeyNode *
+copy_key_list (KeyNode *list)
+{
+  KeyNode *new_list = NULL;
+  for (
+       KeyNode **node = &list, **copy = &new_list;
+       *node;
+       node = &(*node)->next, copy = &(*copy)->next)
+    {
+      *copy = create_key_node ((*node)->key);
+    }
+  return new_list;
+}
+
 void
 associate_key_with_tag (CacheTag tag, CacheKey key)
 {
@@ -137,19 +174,105 @@ associate_key_with_tag (CacheTag tag, CacheKey key)
   TagNode *node = get_or_create_node (&root, tag);
 #if DEBUG
   assert (node != NULL);
-  /* if (insert_if_unique (&node->keys, key)) */
-  /*   printf ("%s: '%.*s' < '%.*s'\n", __FUNCTION__, */
-  /*           tag.nmemb, tag.base, key.nmemb, key.base); */
 #endif
   insert_if_unique (&node->keys, key);
 }
 
 void
-clear_entries_matching_all_tags (CacheTag *tags, u8 ntags)
+release_key_list (KeyNode *node)
 {
-  (void) tags;
-  (void) ntags;
-  fprintf (stderr, "%s: NOT IMPLEMENTED\n", __FUNCTION__);
+  while (node)
+    {
+      KeyNode *next = node->next;
+      release_memory (node);
+      node = next;
+    }
+}
+
+KeyNode *
+get_keys_matching_any_tag (CacheTag *tags, u8 ntags)
+{
+  // @Incomplete: MT-safety!
+
+#if DEBUG
+  assert (tags != NULL);
+#endif
+
+  KeyNode *found_keys = NULL;
+
+  if (ntags == 0)
+    return NULL;
+
+  found_keys = get_keys_by_tag (tags[0]); // Maybe `get_and_lock_keys_by_tag'
+  found_keys = copy_key_list   (found_keys); // .. then release lock after copy
+
+  for (u8 t = 1; t < ntags; ++t)
+    {
+      KeyNode *keys = get_keys_by_tag (tags[t]); // .. and lock here too
+
+      for (KeyNode **tag_key = &keys;
+           *tag_key;
+           tag_key = &(*tag_key)->next)
+        {
+          insert_if_unique (&found_keys, (*tag_key)->key);
+        }
+    }
+
+  return found_keys;
+}
+
+KeyNode *
+get_keys_matching_all_tags (CacheTag *tags, u8 ntags)
+{
+  // @Incomplete: MT-safety!
+
+#if DEBUG
+  assert (tags != NULL);
+#endif
+
+  KeyNode *found_keys = NULL;
+
+  if (ntags == 0)
+    return NULL;
+
+  found_keys = get_keys_by_tag (tags[0]); // Maybe `get_and_lock_keys_by_tag'
+  found_keys = copy_key_list   (found_keys); // .. then release lock after copy
+
+  for (u8 t = 1; t < ntags; ++t)
+    {
+      KeyNode *keys = get_keys_by_tag (tags[t]); // .. and lock here too
+
+      for (KeyNode **found_key = &found_keys;
+           *found_key;
+           found_key = &(*found_key)->next)
+        {
+          bool match;
+        skip_advancement:
+          match = false;
+          for (KeyNode **tag_key = &keys;
+               *tag_key;
+               tag_key = &(*tag_key)->next)
+            {
+              if (keys_are_equal ((*found_key)->key, (*tag_key)->key))
+                {
+                  match = true;
+                  break;
+                }
+            }
+          if (!match)
+            {
+              KeyNode *not_found = *found_key;
+              *found_key = not_found->next;
+              release_memory (not_found);
+              if (*found_key)
+                goto skip_advancement;
+              else
+                break;
+            }
+        }
+    }
+
+  return found_keys;
 }
 
 void

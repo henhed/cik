@@ -307,28 +307,20 @@ handle_set_request (Client *client, Request *request)
 }
 
 static StatusCode
-handle_del_request (Client *client, Request *request)
+delete_entry_by_key (CacheKey key)
 {
-  PROFILE (PROF_HANDLE_DEL_REQUEST);
-
-  StatusCode status;
   CacheEntry *entry = NULL;
 
-  u8 tmp_key_data[0xFF];
-  CacheKey key = {
-    .base = tmp_key_data,
-    .nmemb = request->d.klen
-  };
-
-  // Read key
-  status = read_request_payload (client, key.base, key.nmemb);
-  if (status != STATUS_OK)
-    return status;
+#if DEBUG
+  fprintf (stderr, "Deleting entry '%.*s'\n", key.nmemb, key.base);
+#endif
 
   // Unmap entry
   entry = lock_and_unset_cache_entry (entry_map, key);
   if (!entry)
     return STATUS_NOT_FOUND;
+
+  // @Incomplete: Remove tag associations
 
   do
     {
@@ -344,12 +336,32 @@ handle_del_request (Client *client, Request *request)
 }
 
 static StatusCode
+handle_del_request (Client *client, Request *request)
+{
+  PROFILE (PROF_HANDLE_DEL_REQUEST);
+
+  StatusCode status;
+  u8 tmp_key_data[0xFF];
+  CacheKey key = {
+    .base = tmp_key_data,
+    .nmemb = request->d.klen
+  };
+
+  // Read key
+  status = read_request_payload (client, key.base, key.nmemb);
+  if (status != STATUS_OK)
+    return status;
+
+  return delete_entry_by_key (key);
+}
+
+static StatusCode
 handle_clr_request (Client *client, Request *request)
 {
   PROFILE (PROF_HANDLE_CLR_REQUEST);
 
   StatusCode status;
-  u8 mode  = request->c.mode;
+  ClearMode mode = (ClearMode) request->c.mode;
   u8 ntags = request->c.ntags;
   CacheTag tags[ntags];
   u8 *buffer;
@@ -380,19 +392,31 @@ handle_clr_request (Client *client, Request *request)
 
   switch (mode)
     {
+    case CLEAR_MODE_MATCH_NONE: // Is there a good use case for this? (fallthrough)
     case CLEAR_MODE_ALL:
-      return STATUS_BUG;
+      return STATUS_BUG; // Not implemented
     case CLEAR_MODE_OLD:
-      return STATUS_BUG;
-    case CLEAR_MODE_MATCH_ALL:
-      clear_entries_matching_all_tags (tags, ntags);
-      return STATUS_OK;
-    case CLEAR_MODE_MATCH_NONE:
-      clear_entries_not_matching_any_tag (tags, ntags);
-      return STATUS_OK;
+      return STATUS_BUG; // Not implemented
+    case CLEAR_MODE_MATCH_ALL: // Intentional fallthrough
     case CLEAR_MODE_MATCH_ANY:
-      clear_entries_matching_any_tag (tags, ntags);
-      return STATUS_OK;
+      {
+        KeyNode *keys = NULL;
+
+        keys = (mode == CLEAR_MODE_MATCH_ALL)
+          ? get_keys_matching_all_tags (tags, ntags)
+          : get_keys_matching_any_tag  (tags, ntags);
+#if DEBUG
+        fprintf (stderr, "Clearing tags (mode %s):\n",
+                 (mode == CLEAR_MODE_MATCH_ALL) ? "ALL" : "ANY");
+        for (u8 t = 0; t < ntags; ++t)
+          fprintf (stderr, "\t- '%.*s'\n", tags[t].nmemb, tags[t].base);
+#endif
+        for (KeyNode **key = &keys; *key; key = &(*key)->next)
+          delete_entry_by_key ((*key)->key);
+        release_key_list (keys);
+
+        return STATUS_OK;
+      }
     default:
       return STATUS_PROTOCOL_ERROR;
     }

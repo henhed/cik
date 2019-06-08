@@ -34,9 +34,6 @@ main (int argc, char **argv)
     Response response;
     assert (IS_REQUEST_STRUCT_VALID (request));
     assert (IS_RESPONSE_STRUCT_VALID (response));
-
-    // We use errno codes in responses, don't know how platform specific these are!
-    assert (ENODATA == 61);
   }
 
   ////////////////////////////////////////
