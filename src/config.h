@@ -15,9 +15,11 @@
 #define MAX_NUM_CACHE_ENTRIES 823117
 /* #define MAX_NUM_CACHE_ENTRIES 23 */
 
-#define SERVER_PORT 5555
-#define SERVER_BACKLOG 0xFF
-#define MAX_NUM_CLIENTS 0xFF
-#define MAX_NUM_EVENTS 0xFF
+#define SERVER_PORT        5555
+#define SERVER_BACKLOG     0x100
+#define NUM_WORKERS        0x10
+#define MAX_NUM_CLIENTS    0x100
+#define MAX_NUM_EVENTS     0x100
+#define WORKER_SLEEPY_TIME 10000000 // 10 ms
 
 #endif /* ! CONFIG_H */

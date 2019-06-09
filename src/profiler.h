@@ -3,7 +3,7 @@
 
 #include "types.h"
 
-#if DEBUG
+#if 0 // Pointless until multi threaded
 # define CONCAT(x, y) x ## y
 # define CONCAT2(x, y) CONCAT (x, y)
 # define PROFILE(name) \

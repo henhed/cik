@@ -88,6 +88,7 @@ profile_scope_exit (Profiler *profiler)
 void
 debug_print_profilers (int fd)
 {
+#if 0 // Pointless until multi threaded
   float to_seconds = 1.f / (float) get_performance_frequency ();
 
   dprintf (fd, "%-20s%-12s%-12s%-12s\n", "Name", "Count", "Total Cost", "Self Cost");
@@ -103,6 +104,10 @@ debug_print_profilers (int fd)
     }
 
   dprintf (fd, "------------------------------------------------------\n");
+#else
+  (void) fd;
+  (void) profiler_names;
+#endif
 }
 
 u64

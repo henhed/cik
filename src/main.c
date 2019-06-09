@@ -19,8 +19,6 @@ volatile atomic_bool quit;
 static void sigint_handler (int);
 static void test_hash_map (void);
 
-static int server_accept_thread (void *);
-
 int
 main (int argc, char **argv)
 {
@@ -30,9 +28,9 @@ main (int argc, char **argv)
   ////////////////////////////////////////
   // Sanity checks
   {
-    Request request;
+    Request  request;
     Response response;
-    assert (IS_REQUEST_STRUCT_VALID (request));
+    assert (IS_REQUEST_STRUCT_VALID  (request));
     assert (IS_RESPONSE_STRUCT_VALID (response));
   }
 
@@ -42,6 +40,11 @@ main (int argc, char **argv)
   // Try to cleanly exit given SIGINT
   signal (SIGINT, sigint_handler);
 
+  if (0 > init_memory ())
+    return EXIT_FAILURE;
+
+  init_cache_entry_map (entry_map);
+
   printf ("Starting server on port %u\n", SERVER_PORT);
   if (0 != start_server ())
     {
@@ -49,47 +52,21 @@ main (int argc, char **argv)
       return EXIT_FAILURE;
     }
 
-  if (0 > init_memory ())
-    return EXIT_FAILURE;
-
   FILE *info_file = fopen ("info.txt", "w");
   int   info_fd   = fileno (info_file);
 
   ////////////////////////////////////////
   // ... Profit
-  init_cache_entry_map (entry_map);
   test_hash_map (); // @Temporary
-
-  float time_elapsed = 0.f;
-
-  thrd_t thread;
-  int err = thrd_create (&thread, server_accept_thread, NULL);
-  if (err < 0)
-    fprintf (stderr, "%s:%d: %s\n", __FUNCTION__, __LINE__, strerror (errno));
 
   while (!atomic_load (&quit))
     {
-      u64 start_tick = get_performance_counter ();
-      {
-        PROFILE (PROF_MAIN_LOOP);
-        server_read ();
-        sleep (0);
-      }
-      time_elapsed += ((float) (get_performance_counter () - start_tick)
-                       / get_performance_frequency ());
-      if (time_elapsed > 1.f)
-        {
-          time_elapsed -= 1.f;
-          rewind (info_file);
-          debug_print_profilers (info_fd);
-          debug_print_memory (info_fd);
-          debug_print_tags (info_fd);
-        }
+      rewind (info_file);
+      debug_print_profilers (info_fd);
+      debug_print_memory (info_fd);
+      debug_print_tags (info_fd);
+      sleep (1);
     }
-
-  err = thrd_join (thread, NULL);
-  if (err < 0)
-    fprintf (stderr, "%s:%d: %s\n", __FUNCTION__, __LINE__, strerror (errno));
 
   ////////////////////////////////////////
   // Clean up
@@ -101,23 +78,6 @@ main (int argc, char **argv)
   release_all_memory ();
 
   return EXIT_SUCCESS;
-}
-
-static int
-server_accept_thread (void *user_data)
-{
-  (void) user_data;
-
-  printf ("Starting thread %s[0x%lX]\n", __FUNCTION__, thrd_current ());
-
-  while (!atomic_load (&quit))
-    {
-      struct timespec delay = {.tv_sec = 0, .tv_nsec = 0};
-      server_accept ();
-      thrd_sleep (&delay, NULL);
-    }
-
-  return thrd_success;
 }
 
 static void

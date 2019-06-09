@@ -25,8 +25,9 @@
 typedef struct
 {
   int fd;
+  atomic_bool is_running;
+  thrd_t accept_thread;
   struct sockaddr_in addr;
-  int epfd;
 } Server;
 
 typedef struct
@@ -36,10 +37,21 @@ typedef struct
   socklen_t addrlen;
 } Client;
 
+typedef struct
+{
+  thrd_t thread;
+  u32    id;
+  int    epfd;
+} Worker;
+
 static Server server = { 0 };
 static Client clients[MAX_NUM_CLIENTS] = {{ 0 }};
 static size_t num_clients = 0;
+static Worker workers[NUM_WORKERS] = {{ 0 }};
+static thread_local Worker *current_worker = NULL;
 
+static int        run_worker             (Worker *);
+static int        run_accept_thread      (Server *);
 static StatusCode read_request           (Client *, Request *);
 static StatusCode read_request_payload   (Client *, u8 *, u32);
 static StatusCode write_response         (Client *, Response *);
@@ -61,13 +73,6 @@ start_server ()
   if (0 > setsockopt (server.fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof (on)))
     fprintf (stderr, "Could not enable TCP_NODELAY: %s\n", strerror (errno));
 
-  server.epfd = epoll_create (MAX_NUM_CLIENTS); // Size is actually ignored here
-  if (server.epfd < 0)
-    {
-      close (server.fd);
-      return errno;
-    }
-
   server.addr.sin_family = AF_INET;
   server.addr.sin_addr.s_addr = INADDR_ANY;
   server.addr.sin_port = htons (SERVER_PORT);
@@ -75,25 +80,46 @@ start_server ()
   if (0 > bind (server.fd, (struct sockaddr *) &server.addr, sizeof (server.addr)))
     {
       close (server.fd);
-      close (server.epfd);
       return errno;
     }
 
   if (0 > listen (server.fd, SERVER_BACKLOG))
     {
       close (server.fd);
-      close (server.epfd);
       return errno;
+    }
+
+  atomic_init (&server.is_running, true);
+
+  for (u32 id = 0; id < NUM_WORKERS; ++id)
+    {
+      Worker *worker = &workers[id];
+      worker->id = id;
+      if (thrd_create (&worker->thread, (thrd_start_t) run_worker, worker) < 0)
+        {
+          fprintf (stderr, "%s:%d: %s\n", __FUNCTION__, __LINE__,
+                   strerror (errno));
+        }
+    }
+
+  if (thrd_create (&server.accept_thread,
+                   (thrd_start_t) run_accept_thread,
+                   &server) < 0)
+    {
+      fprintf (stderr, "%s:%d: %s\n", __FUNCTION__, __LINE__, strerror (errno));
     }
 
   return 0;
 }
 
-int
-server_accept ()
+static int
+maybe_accept_new_connection (Server *server)
 {
   PROFILE (PROF_SERVER_ACCEPT);
 
+  static thread_local u32 worker_id = 0;
+
+  Worker *worker = NULL;
   Client *client = NULL;
   struct epoll_event event = { 0 };
 
@@ -116,23 +142,39 @@ server_accept ()
     }
 
   client->addrlen = sizeof (client->addr);
-  client->fd = accept (server.fd,
+  client->fd = accept (server->fd,
                        (struct sockaddr *) &client->addr,
                        &client->addrlen);
   if (client->fd < 0)
     return errno;
 
+  worker = &workers[worker_id];
+
   event.events = EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP;
   event.data.ptr = client;
-  if (0 > epoll_ctl (server.epfd, EPOLL_CTL_ADD, client->fd, &event))
+  if (0 > epoll_ctl (worker->epfd, EPOLL_CTL_ADD, client->fd, &event))
     {
       close_client (client);
       return errno;
     }
 
-  /* debug_print_client (client); */
+  worker_id = (worker_id + 1) % NUM_WORKERS; // Round robin
 
   return 0;
+}
+
+static int
+run_accept_thread (Server *server)
+{
+  struct timespec delay = {.tv_sec = 0, .tv_nsec = WORKER_SLEEPY_TIME};
+
+  while (atomic_load (&server->is_running))
+    {
+      maybe_accept_new_connection (server);
+      thrd_sleep (&delay, NULL);
+    }
+
+  return thrd_success;
 }
 
 static thread_local u32     payload_buffer_cap = 0;
@@ -214,7 +256,8 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
   if (!entry)
     {
 #if DEBUG
-      printf (RED ("GET") ": '%.*s'\n", klen, tmp_key_data);
+      printf (RED ("GET") "[%X]: '%.*s'\n",
+              current_worker->id, klen, tmp_key_data);
 #endif
       return STATUS_NOT_FOUND;
     }
@@ -247,7 +290,8 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
   UNLOCK_ENTRY (entry);
 
 #if DEBUG
-  printf (GREEN ("GET") ": '%.*s'\n", klen, tmp_key_data);
+  printf (GREEN ("GET") "[%X]: '%.*s'\n",
+          current_worker->id, klen, tmp_key_data);
 #endif
 
   return STATUS_OK;
@@ -366,7 +410,8 @@ handle_set_request (Client *client, Request *request)
   UNLOCK_ENTRY (entry);
 
 #if DEBUG
-  printf (BLUE ("SET") ": '%.*s'\n", klen, tmp_key_data);
+  printf (BLUE ("SET") "[%X]: '%.*s'\n",
+          current_worker->id, klen, tmp_key_data);
 #endif
 
   return STATUS_OK;
@@ -378,7 +423,8 @@ delete_entry_by_key (CacheKey key)
   CacheEntry *entry = NULL;
 
 #if DEBUG
-  printf (YELLOW ("DEL") ": '%.*s'\n", key.nmemb, key.base);
+  printf (YELLOW ("DEL") "[%X]: '%.*s'\n",
+          current_worker->id, key.nmemb, key.base);
 #endif
 
   // Unmap entry
@@ -452,7 +498,7 @@ handle_clr_request (Client *client, Request *request)
         KeyNode *keys = NULL;
 
 #if DEBUG
-        printf (YELLOW ("CLR") ": (MATCH %s)",
+        printf (YELLOW ("CLR") "[%X]: (MATCH %s)", current_worker->id,
                 (mode == CLEAR_MODE_MATCH_ALL) ? "ALL" : "ANY");
         for (u8 t = 0; t < ntags; ++t)
           printf (" '%.*s'", tags[t].nmemb, tags[t].base);
@@ -508,13 +554,13 @@ handle_request (Client *client, Request *request, Payload **response_payload)
     }
 }
 
-int
-server_read ()
+static int
+process_worker_events (Worker *worker)
 {
   PROFILE (PROF_SERVER_READ);
 
   struct epoll_event events[MAX_NUM_EVENTS] = {{ 0 }};
-  int nevents = epoll_wait (server.epfd, events, MAX_NUM_EVENTS, 0);
+  int nevents = epoll_wait (worker->epfd, events, MAX_NUM_EVENTS, 0);
   if (nevents < 0)
     {
       fprintf (stderr, "%s: epoll_wait failed: %s\n",
@@ -608,12 +654,48 @@ server_read ()
   return nevents;
 }
 
+static int
+run_worker (Worker *worker)
+{
+  struct timespec delay = {.tv_sec = 0, .tv_nsec = WORKER_SLEEPY_TIME};
+
+  current_worker = worker;
+
+  worker->epfd = epoll_create (MAX_NUM_CLIENTS); // Size is actually ignored here
+  if (worker->epfd < 0)
+    {
+      fprintf (stderr, "%s:%d: %s\n", __FUNCTION__, __LINE__, strerror (errno));
+      return thrd_error;
+    }
+
+  while (atomic_load (&server.is_running))
+    {
+      process_worker_events (worker);
+      thrd_sleep (&delay, NULL);
+    }
+
+  close (worker->epfd);
+
+  return thrd_success;
+}
+
 void
 stop_server ()
 {
+  atomic_store (&server.is_running, false);
+
+  if (0 > thrd_join (server.accept_thread, NULL))
+    fprintf (stderr, "%s:%d: %s\n", __FUNCTION__, __LINE__, strerror (errno));
+
+  for (u32 w = 0; w < NUM_WORKERS; ++w)
+    {
+      if (0 > thrd_join (workers[w].thread, NULL))
+        fprintf (stderr, "%s:%d: %s\n", __FUNCTION__, __LINE__,
+                 strerror (errno));
+    }
+
   for (u32 i = 0; i < MAX_NUM_CLIENTS; ++i)
     close_client (&clients[i]);
-  close (server.epfd);
   close (server.fd);
 }
 
