@@ -8,8 +8,11 @@
 # include <stdio.h>
 #endif
 
-#define LOCK_SLOT(m, s) do {} while (atomic_flag_test_and_set (&(map)->guards[slot]))
-#define UNLOCK_SLOT(m, s) atomic_flag_clear (&(m)->guards[slot])
+#define LOCK_SLOT(m, s) \
+  do {} while (atomic_flag_test_and_set_explicit (&(map)->guards[slot], \
+                                                  memory_order_acquire))
+#define UNLOCK_SLOT(m, s) \
+  atomic_flag_clear_explicit (&(m)->guards[slot], memory_order_release)
 
 static inline u32
 get_hash (const u8 *base, u32 nmemb)
@@ -292,15 +295,13 @@ debug_print_entry (CacheEntry *entry)
   bool expires = (entry->expiry != CACHE_EXPIRY_INIT);
   printf ("%s: Content is: {\n"
           " TTL: %ld\n"
+          " TAGS: %u\n"
           " KEY: \"%.*s\"\n"
-          " TAGS: [\"%.*s\", \"%.*s\", \"%.*s\"]\n"
           " VAL: \"%.*s\"\n}\n",
           __FUNCTION__,
           expires ? (entry->expiry - time (NULL)) : -1,
-          entry->key.nmemb,     entry->key.base,
-          entry->tags[0].nmemb, entry->tags[0].base,
-          entry->tags[1].nmemb, entry->tags[1].base,
-          entry->tags[2].nmemb, entry->tags[2].base,
-          entry->value.nmemb,   entry->value.base
+          entry->tags.nmemb,
+          entry->key.nmemb, entry->key.base,
+          entry->value.nmemb, entry->value.base
           );
 }

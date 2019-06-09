@@ -222,43 +222,40 @@ class CiK //implements Zend_Cache_Backend_Interface
     }
 
     private function makeSetMessage(
-        string $key,
-        string $value,
-        array $tags = [],
-        int $specificLifetime = null
-    ): string {
-
+        $key,
+        $value,
+        $tags = [],
+        $specificLifetime = null
+    ) {
         // :SET
         // Size         Offset          Value
         // char[3]      0               'CiK' (Sanity)
         // char         3               's'   (OP code)
         // u8           4               Key length
-        // u8           5               Tag 0 length
-        // u8           6               Tag 1 length
-        // u8           7               Tag 2 length
+        // u8           5               num tags
+        // u8[2]        6               Padding
         // u32          8               Value length
         // u32          12              TTL in seconds
         // void *       16              (key + tags + value)
         $key  = $this->formatKey($key);
+        $tags = array_filter($tags);
+        $tags = array_unique($tags);
+        $tags = array_slice($tags, 0, 0xFF);
         $klen = strlen($key);
+        $tlen = count($tags);
         $vlen = strlen($value);
-        $tag0 = $this->formatTag((string) array_shift($tags));
-        $tag1 = $this->formatTag((string) array_shift($tags));
-        $tag2 = $this->formatTag((string) array_shift($tags));
         $head = pack(
-            'c3cCC3NN',
+            'c3cCC@8NN',
             self::CONTROL_BYTE_1,
             self::CONTROL_BYTE_2,
             self::CONTROL_BYTE_3,
             self::CMD_BYTE_SET,
             $klen,
-            ($tag0 !== null) ? strlen($tag0) : 0,
-            ($tag1 !== null) ? strlen($tag1) : 0,
-            ($tag2 !== null) ? strlen($tag2) : 0,
+            $tlen,
             $vlen,
             $specificLifetime === null ? 0xFFFFFFFF : $specificLifetime
         );
-        return $head . $key . $tag0 . $tag1 . $tag2 . $value;
+        return $head . $key . $this->makeTagMessage($tags) . $value;
     }
 
     private function makeDelMessage(string $key): string
@@ -401,7 +398,8 @@ $success = $cik->save(
     [
         'catalog_product_13',
         'store_1',
-        'CONFIG'
+        'CONFIG',
+        'a', 'b', 'c', 'asdfasdfasdfasdf'
     ],
     10
 );
@@ -431,8 +429,8 @@ $success = $cik->save(
 var_dump($success);
 
 $cik->clean(Zend_Cache::CLEANING_MODE_MATCHING_ANY_TAG, [
-    'store_1',
     'CONFIG',
+    'a'
 ]);
 
 die;

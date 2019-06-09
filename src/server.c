@@ -148,6 +148,39 @@ init_payload_buffer ()
 }
 
 static StatusCode
+read_tags_using_payload_buffer (Client *client, CacheTag *tags, u8 ntags)
+{
+  StatusCode status;
+  u8        *buffer;
+  u32        buffer_cap;
+
+  status = init_payload_buffer ();
+  if (status != STATUS_OK)
+    return status;
+
+  buffer = payload_buffer.base;
+  buffer_cap = payload_buffer_cap;
+
+  for (u8 t = 0; t < ntags; ++t)
+    {
+      CacheTag *tag = &tags[t];
+      status = read_request_payload (client, &tag->nmemb, sizeof (tag->nmemb));
+      if (status != STATUS_OK)
+        return status;
+      if (tag->nmemb > buffer_cap)
+        return STATUS_OUT_OF_MEMORY; // @Cleanup: Drain input stream
+      status = read_request_payload (client, buffer, tag->nmemb);
+      if (status != STATUS_OK)
+        return status;
+      tag->base = buffer;
+      buffer += tag->nmemb;
+      buffer_cap -= tag->nmemb;
+    }
+
+  return STATUS_OK;
+}
+
+static StatusCode
 handle_get_request (Client *client, Request *request, Payload **response_payload)
 {
   PROFILE (PROF_HANDLE_GET_REQUEST);
@@ -175,7 +208,12 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
 
   entry = lock_and_get_cache_entry (entry_map, key);
   if (!entry)
-    return STATUS_NOT_FOUND;
+    {
+#if DEBUG
+      printf ("GET: (MISS) '%.*s'\n", klen, tmp_key_data);
+#endif
+      return STATUS_NOT_FOUND;
+    }
 
   if (~flags & GET_FLAG_IGNORE_EXPIRY)
     {
@@ -204,6 +242,10 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
 
   UNLOCK_ENTRY (entry);
 
+#if DEBUG
+  printf ("GET: (HIT) '%.*s'\n", klen, tmp_key_data);
+#endif
+
   return STATUS_OK;
 }
 
@@ -216,15 +258,15 @@ handle_set_request (Client *client, Request *request)
   CacheEntry *entry = NULL, *old_entry = NULL;
 
   u8  klen  = request->s.klen;
-  u8  tlen0 = request->s.tlen[0];
-  u8  tlen1 = request->s.tlen[1];
-  u8  tlen2 = request->s.tlen[2];
+  u32 tlen  = 0;
   u32 vlen  = request->s.vlen;
+  u8  ntags = request->s.ntags;
   u32 ttl   = request->s.ttl;
 
-  u8     *payload;
-  u8      tmp_key_data[0xFF];
-  size_t  total_size = klen + tlen0 + tlen1 + tlen2 + vlen;
+  u8      *payload;
+  u8       tmp_key_data[0xFF];
+  size_t   total_size;
+  CacheTag tags[ntags];
 
   // Read key
   status = read_request_payload (client, tmp_key_data, klen);
@@ -236,6 +278,16 @@ handle_set_request (Client *client, Request *request)
   // Right now we're always reserving new memory and releasing the old.
   // But who knows, maybe reserving new memory will be faster in the end.
 
+  status = read_tags_using_payload_buffer (client, tags, ntags);
+  if (status != STATUS_OK)
+    return status;
+
+  tlen = sizeof (tags);
+  for (u8 t = 0; t < ntags; ++t)
+    tlen += tags[t].nmemb;
+
+  total_size = tlen + klen + vlen;
+
   // @Speed: Both keys and tags tend to be prefixed and so in general they
   // should have more entropy at near end. If we store keys and tags in reverse
   // byte order we should help memcpy to exit early.
@@ -246,28 +298,39 @@ handle_set_request (Client *client, Request *request)
 
   payload = (u8 *) (entry + 1);
 
+  // Copy read tags into reserved entry payload
+  entry->tags.base = (CacheTag *) payload;
+  entry->tags.nmemb = ntags;
+  payload += sizeof (tags);
+  for (u8 t = 0; t < entry->tags.nmemb; ++t)
+    {
+      CacheTag *tag = &entry->tags.base[t];
+      tag->base = payload;
+      tag->nmemb = tags[t].nmemb;
+      memcpy (tag->base, tags[t].base, tag->nmemb);
+      payload += tag->nmemb;
+    }
+
   // Copy read key into reserved entry payload
   memcpy (payload, tmp_key_data, klen);
   entry->key.base = payload;
   entry->key.nmemb = klen;
   payload += klen;
+  entry->value.base = payload;
+  entry->value.nmemb = vlen;
+  payload += vlen;
 
-  status = read_request_payload (client, payload, total_size - klen);
+#if DEBUG
+  assert ((u32) (payload - (u8 *) (entry + 1)) == total_size);
+#endif
+
+  status = read_request_payload (client, entry->value.base, vlen);
   if (status != STATUS_OK)
     {
       UNLOCK_ENTRY (entry);
       release_memory (entry);
       return status;
     }
-
-  entry->tags[0].base  = entry->key.base + klen;
-  entry->tags[0].nmemb = tlen0;
-  entry->tags[1].base  = entry->tags[0].base + tlen0;
-  entry->tags[1].nmemb = tlen1;
-  entry->tags[2].base  = entry->tags[1].base + tlen1;
-  entry->tags[2].nmemb = tlen2;
-  entry->value.base    = entry->tags[2].base + tlen2;
-  entry->value.nmemb   = vlen;
 
   if (ttl != (u32) -1)
     entry->expiry = time (NULL) + ttl;
@@ -290,18 +353,17 @@ handle_set_request (Client *client, Request *request)
       release_memory (old_entry);
     }
 
-#if DEBUG
-  assert (MAX_NUM_TAGS_PER_ENTRY == 3);
-#endif
-  for (u8 i = 0; i < MAX_NUM_TAGS_PER_ENTRY; ++i)
+  for (u8 t = 0; t < entry->tags.nmemb; ++t)
     {
-      if (entry->tags[i].nmemb > 0)
-        associate_key_with_tag (entry->tags[i], entry->key);
-      else
-        break;
+      // Maybe we don't need to keep the entry locked for this?
+      associate_key_with_tag (entry->tags.base[t], entry->key);
     }
 
   UNLOCK_ENTRY (entry);
+
+#if DEBUG
+  printf ("SET: '%.*s'\n", klen, tmp_key_data);
+#endif
 
   return STATUS_OK;
 }
@@ -312,7 +374,7 @@ delete_entry_by_key (CacheKey key)
   CacheEntry *entry = NULL;
 
 #if DEBUG
-  fprintf (stderr, "Deleting entry '%.*s'\n", key.nmemb, key.base);
+  printf ("DEL: '%.*s'\n", key.nmemb, key.base);
 #endif
 
   // Unmap entry
@@ -361,34 +423,13 @@ handle_clr_request (Client *client, Request *request)
   PROFILE (PROF_HANDLE_CLR_REQUEST);
 
   StatusCode status;
-  ClearMode mode = (ClearMode) request->c.mode;
-  u8 ntags = request->c.ntags;
-  CacheTag tags[ntags];
-  u8 *buffer;
-  u32 buffer_cap;
+  ClearMode  mode  = (ClearMode) request->c.mode;
+  u8         ntags = request->c.ntags;
+  CacheTag   tags[ntags];
 
-  status = init_payload_buffer ();
+  status = read_tags_using_payload_buffer (client, tags, ntags);
   if (status != STATUS_OK)
     return status;
-
-  buffer = payload_buffer.base;
-  buffer_cap = payload_buffer_cap;
-
-  for (u8 t = 0; t < ntags; ++t)
-    {
-      CacheTag *tag = &tags[t];
-      status = read_request_payload (client, &tag->nmemb, sizeof (tag->nmemb));
-      if (status != STATUS_OK)
-        return status;
-      if (tag->nmemb > buffer_cap)
-        return STATUS_OUT_OF_MEMORY; // @Cleanup: Drain input stream
-      status = read_request_payload (client, buffer, tag->nmemb);
-      if (status != STATUS_OK)
-        return status;
-      tag->base = buffer;
-      buffer += tag->nmemb;
-      buffer_cap -= tag->nmemb;
-    }
 
   switch (mode)
     {
@@ -402,15 +443,17 @@ handle_clr_request (Client *client, Request *request)
       {
         KeyNode *keys = NULL;
 
+#if DEBUG
+        printf ("CLR: (MATCH %s)", (mode == CLEAR_MODE_MATCH_ALL) ? "ALL" : "ANY");
+        for (u8 t = 0; t < ntags; ++t)
+          printf (" '%.*s'", tags[t].nmemb, tags[t].base);
+        printf ("\n");
+#endif
+
         keys = (mode == CLEAR_MODE_MATCH_ALL)
           ? get_keys_matching_all_tags (tags, ntags)
           : get_keys_matching_any_tag  (tags, ntags);
-#if DEBUG
-        fprintf (stderr, "Clearing tags (mode %s):\n",
-                 (mode == CLEAR_MODE_MATCH_ALL) ? "ALL" : "ANY");
-        for (u8 t = 0; t < ntags; ++t)
-          fprintf (stderr, "\t- '%.*s'\n", tags[t].nmemb, tags[t].base);
-#endif
+
         for (KeyNode **key = &keys; *key; key = &(*key)->next)
           delete_entry_by_key ((*key)->key);
         release_key_list (keys);
