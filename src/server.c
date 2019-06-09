@@ -16,6 +16,10 @@
 
 #if DEBUG
 # include <assert.h>
+# define BLUE(string)   "\e[0;34m" string "\e[0m"
+# define GREEN(string)  "\e[0;32m" string "\e[0m"
+# define RED(string)    "\e[1;31m" string "\e[0m"
+# define YELLOW(string) "\e[1;33m" string "\e[0m"
 #endif
 
 typedef struct
@@ -210,7 +214,7 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
   if (!entry)
     {
 #if DEBUG
-      printf ("GET: (MISS) '%.*s'\n", klen, tmp_key_data);
+      printf (RED ("GET") ": '%.*s'\n", klen, tmp_key_data);
 #endif
       return STATUS_NOT_FOUND;
     }
@@ -243,7 +247,7 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
   UNLOCK_ENTRY (entry);
 
 #if DEBUG
-  printf ("GET: (HIT) '%.*s'\n", klen, tmp_key_data);
+  printf (GREEN ("GET") ": '%.*s'\n", klen, tmp_key_data);
 #endif
 
   return STATUS_OK;
@@ -362,7 +366,7 @@ handle_set_request (Client *client, Request *request)
   UNLOCK_ENTRY (entry);
 
 #if DEBUG
-  printf ("SET: '%.*s'\n", klen, tmp_key_data);
+  printf (BLUE ("SET") ": '%.*s'\n", klen, tmp_key_data);
 #endif
 
   return STATUS_OK;
@@ -374,7 +378,7 @@ delete_entry_by_key (CacheKey key)
   CacheEntry *entry = NULL;
 
 #if DEBUG
-  printf ("DEL: '%.*s'\n", key.nmemb, key.base);
+  printf (YELLOW ("DEL") ": '%.*s'\n", key.nmemb, key.base);
 #endif
 
   // Unmap entry
@@ -444,7 +448,8 @@ handle_clr_request (Client *client, Request *request)
         KeyNode *keys = NULL;
 
 #if DEBUG
-        printf ("CLR: (MATCH %s)", (mode == CLEAR_MODE_MATCH_ALL) ? "ALL" : "ANY");
+        printf (YELLOW ("CLR") ": (MATCH %s)",
+                (mode == CLEAR_MODE_MATCH_ALL) ? "ALL" : "ANY");
         for (u8 t = 0; t < ntags; ++t)
           printf (" '%.*s'", tags[t].nmemb, tags[t].base);
         printf ("\n");

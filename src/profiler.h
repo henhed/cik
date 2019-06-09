@@ -3,12 +3,16 @@
 
 #include "types.h"
 
-#define CONCAT(x, y) x ## y
-#define CONCAT2(x, y) CONCAT (x, y)
-#define PROFILE(name) \
+#if DEBUG
+# define CONCAT(x, y) x ## y
+# define CONCAT2(x, y) CONCAT (x, y)
+# define PROFILE(name) \
   __attribute__ ((unused)) Profiler CONCAT2 (_profile_, __COUNTER__) \
   __attribute__ ((__cleanup__ (profile_scope_exit))) \
   = profile_scope_enter (name);
+#else
+# define PROFILE(name)
+#endif
 
 typedef enum
 {

@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "tag.h"
@@ -8,12 +9,12 @@
 # include <assert.h>
 #endif
 
-static u8 root_value = 0x4F; // Midddle of ASCII printable characters
+static u8 root_value[] = { 'R', 'O', 'O', 'T'  };
 static TagNode root = {
-  .tag.base = &root_value,
-  .tag.nmemb = 1,
-  .left = NULL,
-  .right = NULL
+  .tag.base  = root_value,
+  .tag.nmemb = sizeof (root_value),
+  .left      = NULL,
+  .right     = NULL
 };
 
 static bool
@@ -107,7 +108,9 @@ get_or_create_node (TagNode *parent, CacheTag tag)
         {
           TagNode *node;
           node = reserve_memory (sizeof (TagNode) + (sizeof (u8) * tag.nmemb));
+#if DEBUG
           assert (node);
+#endif
           *node = (TagNode) { 0 };
           node->tag.base = (u8 *) (node + 1);
           node->tag.nmemb = tag.nmemb;
@@ -275,70 +278,107 @@ get_keys_matching_all_tags (CacheTag *tags, u8 ntags)
   return found_keys;
 }
 
-void
-clear_entries_matching_any_tag (CacheTag *tags, u8 ntags)
-{
-  (void) tags;
-  (void) ntags;
-  fprintf (stderr, "%s: NOT IMPLEMENTED\n", __FUNCTION__);
-}
-
-void
-clear_entries_not_matching_any_tag (CacheTag *tags, u8 ntags)
-{
-  (void) tags;
-  (void) ntags;
-  fprintf (stderr, "%s: NOT IMPLEMENTED\n", __FUNCTION__);
-}
-
+#if 0 // Print tree
 static void
 debug_print_tag (int fd, TagNode *node, u32 depth)
 {
   u32 nentries = 0;
-  dprintf (fd, "%*s'%.*s'\n",
+  dprintf (fd, "%*s'%.*s'",
            depth * 2,
            "* ",
            node->tag.nmemb,
            node->tag.base);
   for (KeyNode **list = &node->keys; *list != NULL; list = &(*list)->next)
     {
-      if (++nentries < 3)
-        dprintf (fd, "%*s'%.*s'\n",
-                 (depth + 1) * 2,
-                 "- ",
+      if (++nentries < 2)
+        dprintf (fd, " => '%.*s'",
                  (*list)->key.nmemb,
                  (*list)->key.base);
     }
   if (nentries > 2)
-    dprintf (fd, "%*s %u more ..\n",
-             (depth + 1) * 2,
-             "- ",
-             nentries - 2);
-  /* u32 nentries = 0; */
-  /* dprintf (fd, "%*s'%.*s'", */
-  /*          depth * 2, */
-  /*          "* ", */
-  /*          node->tag.nmemb, */
-  /*          node->tag.base); */
-  /* for (KeyNode **list = &node->keys; *list != NULL; list = &(*list)->next) */
-  /*   { */
-  /*     if (++nentries < 2) */
-  /*       dprintf (fd, " => '%.*s'", */
-  /*                (*list)->key.nmemb, */
-  /*                (*list)->key.base); */
-  /*   } */
-  /* if (nentries > 2) */
-  /*   dprintf (fd, " (+ %u more)", nentries); */
-  /* dprintf (fd, "\n"); */
+    dprintf (fd, " (+ %u more)", nentries);
+  dprintf (fd, "\n");
   if (node->left)
     debug_print_tag (fd, node->left, depth + 1);
   if (node->right)
     debug_print_tag (fd, node->right, depth + 1);
 }
+#endif
+
+typedef struct
+{
+  CacheTag tag;
+  u32 tree_depth;
+  u32 num_keys;
+} DebugTag;
+
+static int
+cmp_debug_tag (const void *_a, const void *_b)
+{
+  const DebugTag *a = _a;
+  const DebugTag *b = _b;
+  if (a->num_keys < b->num_keys)
+    return 1;
+  else if (b->num_keys < a->num_keys)
+    return -1;
+  return 0;
+}
 
 void
 debug_print_tags (int fd)
 {
-  dprintf (fd, "TAGS:\n");
+  u32 debug_tag_cap   = 1024;
+  u32 debug_tag_nmemb = 0;
+  DebugTag debug_tags[debug_tag_cap];
+
+  u32 stack_cap = 1024;
+  u32 stack_nmemb = 0;
+  TagNode *stack[stack_cap];
+  TagNode *current = &root;
+
+  while ((current != NULL) || (stack_nmemb > 0))
+    {
+      while (current != NULL)
+        {
+          assert (stack_nmemb < stack_cap);
+          stack[stack_nmemb++] = current;
+          current = current->left;
+        }
+
+      assert (stack_nmemb > 0);
+      current = stack[--stack_nmemb];
+
+      {
+        DebugTag *dt = NULL;
+        assert (debug_tag_nmemb < debug_tag_cap);
+        dt = &debug_tags[debug_tag_nmemb++];
+
+        dt->tag        = current->tag;
+        dt->tree_depth = stack_nmemb;
+        dt->num_keys   = 0;
+
+        for (KeyNode **node = &current->keys; *node; node = &(*node)->next)
+          ++dt->num_keys;
+      }
+
+      current = current->right;
+    }
+
+  qsort (debug_tags, debug_tag_nmemb, sizeof (DebugTag), cmp_debug_tag);
+
+  dprintf (fd, "TAGS %-6u %59s  %s\n", debug_tag_nmemb, "KEYS", "DEPTH");
+  for (u32 i = 0; i < debug_tag_nmemb; ++i)
+    {
+      DebugTag *dt = &debug_tags[i];
+      dprintf (fd, "%-64.*s %6u %6u\n",
+               dt->tag.nmemb, dt->tag.base,
+               dt->num_keys,  dt->tree_depth);
+
+      if (i == 19)
+        break; // Only print top 20
+    }
+
+#if 0 // Print tree
   debug_print_tag (fd, &root, 2);
+#endif
 }

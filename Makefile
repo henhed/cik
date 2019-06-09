@@ -11,7 +11,7 @@ OBJECTS = $(SOURCES:$(SRC_PATH)/%.$(SRC_EXT)=$(BUILD_PATH)/%.o)
 DEPS = $(OBJECTS:.o=.d)
 
 COMPILER_FLAGS = -std=c11 -Wall -Wextra -Werror -D_GNU_SOURCE -ggdb
-#COMPILER_FLAGS = -std=c11 -Wall -Wextra -Werror -D_GNU_SOURCE -Winline -O3
+#COMPILER_FLAGS = -std=c11 -Wall -Wextra -Werror -Winline -O3 -D_GNU_SOURCE
 INCLUDES = -I include/
 LIBS = -pthread
 LDFLAGS =

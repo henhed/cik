@@ -292,6 +292,7 @@ set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
 void
 debug_print_entry (CacheEntry *entry)
 {
+#if DEBUG
   bool expires = (entry->expiry != CACHE_EXPIRY_INIT);
   printf ("%s: Content is: {\n"
           " TTL: %ld\n"
@@ -304,4 +305,7 @@ debug_print_entry (CacheEntry *entry)
           entry->key.nmemb, entry->key.base,
           entry->value.nmemb, entry->value.base
           );
+#else
+  (void) entry;
+#endif
 }
