@@ -136,8 +136,8 @@ get_or_create_node (TagNode *parent, CacheTag tag)
   return NULL;
 }
 
-static KeyNode *
-get_keys_by_tag (CacheTag tag)
+static TagNode *
+get_tag_if_exists (CacheTag tag)
 {
   TagNode *current = &root;
 
@@ -145,7 +145,7 @@ get_keys_by_tag (CacheTag tag)
     {
       int diff = compare_tags (tag, current->tag);
       if (diff == 0)
-        return current->keys;
+        return current;
 
       if (diff < 0)
         current = current->left;
@@ -154,6 +154,13 @@ get_keys_by_tag (CacheTag tag)
     }
 
   return NULL;
+}
+
+static KeyNode *
+get_keys_by_tag (CacheTag tag)
+{
+  TagNode *node = get_tag_if_exists (tag);
+  return (node != NULL) ? node->keys : NULL;
 }
 
 static KeyNode *
@@ -171,14 +178,36 @@ copy_key_list (KeyNode *list)
 }
 
 void
-associate_key_with_tag (CacheTag tag, CacheKey key)
+add_key_to_tag (CacheTag tag, CacheKey key)
 {
   // @Incomplete: MT-safety!
+
   TagNode *node = get_or_create_node (&root, tag);
 #if DEBUG
   assert (node != NULL);
 #endif
   insert_if_unique (&node->keys, key);
+}
+
+void
+remove_key_from_tag (CacheTag tag, CacheKey key)
+{
+  // @Incomplete: MT-safety!
+
+  TagNode *tnode = get_tag_if_exists (tag);
+  if (tnode == NULL)
+    return;
+
+  for (KeyNode **knode = &tnode->keys; *knode; knode = &(*knode)->next)
+    {
+      if (keys_are_equal ((*knode)->key, key))
+        {
+          KeyNode *found = *knode;
+          *knode = found->next;
+          release_memory (found);
+          break; // We assume there are no dupes (`insert_if_unique').
+        }
+    }
 }
 
 void

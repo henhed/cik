@@ -360,7 +360,7 @@ handle_set_request (Client *client, Request *request)
   for (u8 t = 0; t < entry->tags.nmemb; ++t)
     {
       // Maybe we don't need to keep the entry locked for this?
-      associate_key_with_tag (entry->tags.base[t], entry->key);
+      add_key_to_tag (entry->tags.base[t], entry->key);
     }
 
   UNLOCK_ENTRY (entry);
@@ -386,7 +386,11 @@ delete_entry_by_key (CacheKey key)
   if (!entry)
     return STATUS_NOT_FOUND;
 
-  // @Incomplete: Remove tag associations
+  for (u8 t = 0; t < entry->tags.nmemb; ++t)
+    {
+      // Maybe we don't need to keep the entry locked for this?
+      remove_key_from_tag (entry->tags.base[t], entry->key);
+    }
 
   do
     {

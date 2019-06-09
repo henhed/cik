@@ -3,7 +3,8 @@
 
 #include "types.h"
 
-void     associate_key_with_tag       (CacheTag, CacheKey);
+void     add_key_to_tag               (CacheTag, CacheKey);
+void     remove_key_from_tag          (CacheTag, CacheKey);
 KeyNode *get_keys_matching_any_tag    (CacheTag *, u8); // A.K.A. union
 KeyNode *get_keys_matching_all_tags   (CacheTag *, u8); // A.K.A. intersection
 void     release_key_list             (KeyNode *);
