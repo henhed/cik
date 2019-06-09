@@ -10,6 +10,7 @@
 
 #include "memory.h"
 #include "entry.h"
+#include "print.h"
 
 typedef struct
 {
@@ -232,8 +233,12 @@ release_all_memory ()
 void
 debug_print_memory (int fd)
 {
-  dprintf (fd, "Memory buckets:\n");
-  dprintf (fd, "%-12s%-12s%-12s%-12s\n", "Item Size", "Capacity", "Members", "Usage%");
+  int count = 0;
+
+  count = dprintf (fd, "MEMORY BUCKETS (%lu) ", num_buckets);
+  dprintf (fd, "%.*s\n", LINEWIDTH - count, HLINESTR);
+
+  dprintf (fd, "%-24s%-24s%-24s%s\n", "Item Size", "Capacity", "Members", "Usage%");
 
   static u32 kb = 1024;
   static u32 mb = 1024 * 1024;
@@ -241,17 +246,24 @@ debug_print_memory (int fd)
   for (u32 b = 0; b < num_buckets; ++b)
     {
       Bucket *bucket = &buckets[b];
-      dprintf (fd, "%8u%s %10u %10u %10.2f\n",
+      float usage = 100.f * ((float) bucket->nmemb / bucket->cap);
+      dprintf (fd, "%8u%s",
                ((bucket->size >= mb)
                 ? (bucket->size / mb)
                 : (bucket->size >= kb ? (bucket->size / kb) : bucket->size)),
                ((bucket->size >= mb)
                 ? "M"
-                : (bucket->size >= kb ? "K" : "B")),
-               bucket->cap,
-               bucket->nmemb,
-               100.f * ((float) bucket->nmemb / bucket->cap));
+                : (bucket->size >= kb ? "K" : "B")));
+      dprintf (fd, "             %10u", bucket->cap);
+      dprintf (fd, "             %10u", bucket->nmemb);
+      if (usage > 50.f)
+        dprintf (fd, "             "    RED ("%10.2f"), usage);
+      else if (usage > 25.f)
+        dprintf (fd, "             " YELLOW ("%10.2f"), usage);
+      else
+        dprintf (fd, "             "  GREEN ("%10.2f"), usage);
+      dprintf (fd, "\n");
     }
 
-  dprintf (fd, "------------------------------------------------------\n");
+  dprintf (fd, "\n");
 }

@@ -61,10 +61,12 @@ main (int argc, char **argv)
 
   while (!atomic_load (&quit))
     {
-      rewind (info_file);
+      ftruncate (info_fd, 0);
+      lseek (info_fd, SEEK_SET, 0);
       debug_print_profilers (info_fd);
       debug_print_memory (info_fd);
       debug_print_tags (info_fd);
+      debug_print_clients (info_fd);
       sleep (1);
     }
 

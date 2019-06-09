@@ -12,14 +12,11 @@
 #include "memory.h"
 #include "entry.h"
 #include "tag.h"
+#include "print.h"
 #include "profiler.h"
 
 #if DEBUG
 # include <assert.h>
-# define BLUE(string)   "\e[0;34m" string "\e[0m"
-# define GREEN(string)  "\e[0;32m" string "\e[0m"
-# define RED(string)    "\e[1;31m" string "\e[0m"
-# define YELLOW(string) "\e[1;33m" string "\e[0m"
 #endif
 
 typedef struct
@@ -35,6 +32,13 @@ typedef struct
   int fd;
   struct sockaddr_in addr;
   socklen_t addrlen;
+  struct {
+    u32 get_hit;
+    u32 get_miss;
+    u32 set;
+    u32 del;
+    u32 clr;
+  } counters;
 } Client;
 
 typedef struct
@@ -57,7 +61,6 @@ static StatusCode read_request_payload   (Client *, u8 *, u32);
 static StatusCode write_response         (Client *, Response *);
 static StatusCode write_response_payload (Client *, u8 *, u32);
 static void       close_client           (Client *);
-static void       debug_print_client     (Client *);
 
 int
 start_server ()
@@ -127,6 +130,7 @@ maybe_accept_new_connection (Server *server)
     client = &clients[num_clients++];
   else
     {
+      // @Incomplete: MT-safety!
       for (u32 i = 0; i < MAX_NUM_CLIENTS; ++i)
         {
           int fd = clients[i].fd;
@@ -138,7 +142,7 @@ maybe_accept_new_connection (Server *server)
   if (client == NULL)
     {
       fprintf (stderr, "%s: We're full\n", __FUNCTION__);
-      return -EAGAIN;
+      return EAGAIN;
     }
 
   client->addrlen = sizeof (client->addr);
@@ -147,6 +151,8 @@ maybe_accept_new_connection (Server *server)
                        &client->addrlen);
   if (client->fd < 0)
     return errno;
+
+  memset (&client->counters, 0, sizeof (client->counters));
 
   worker = &workers[worker_id];
 
@@ -259,6 +265,7 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
       printf (RED ("GET") "[%X]: '%.*s'\n",
               current_worker->id, klen, tmp_key_data);
 #endif
+      ++client->counters.get_miss;
       return STATUS_NOT_FOUND;
     }
 
@@ -293,6 +300,8 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
   printf (GREEN ("GET") "[%X]: '%.*s'\n",
           current_worker->id, klen, tmp_key_data);
 #endif
+
+  ++client->counters.get_hit;
 
   return STATUS_OK;
 }
@@ -414,6 +423,8 @@ handle_set_request (Client *client, Request *request)
           current_worker->id, klen, tmp_key_data);
 #endif
 
+  ++client->counters.set;
+
   return STATUS_OK;
 }
 
@@ -468,6 +479,8 @@ handle_del_request (Client *client, Request *request)
   if (status != STATUS_OK)
     return status;
 
+  ++client->counters.del;
+
   return delete_entry_by_key (key);
 }
 
@@ -484,6 +497,8 @@ handle_clr_request (Client *client, Request *request)
   status = read_tags_using_payload_buffer (client, tags, ntags);
   if (status != STATUS_OK)
     return status;
+
+  ++client->counters.clr;
 
   switch (mode)
     {
@@ -585,10 +600,10 @@ process_worker_events (Worker *worker)
 
       if ((event->events & (EPOLLIN | EPOLLOUT)) == (EPOLLIN | EPOLLOUT))
         {
-          Client *client = event->data.ptr;
-          Request request = { 0 };
-          Response response = { 0 };
-          Payload *payload = NULL;
+          Client    *client   = event->data.ptr;
+          Request    request  = { 0 };
+          Response   response = { 0 };
+          Payload   *payload  = NULL;
           StatusCode status;
 
           errno = 0;
@@ -777,20 +792,56 @@ close_client (Client *client)
 }
 
 static void
-debug_print_client (Client *client)
+debug_print_client (int fd, Client *client)
 {
-  printf ("[Client] %d.%d.%d.%d:%d (FD %d)\n",
-          (client->addr.sin_addr.s_addr & 0x000000FF) >>  0,
-          (client->addr.sin_addr.s_addr & 0x0000FF00) >>  8,
-          (client->addr.sin_addr.s_addr & 0x00FF0000) >> 16,
-          (client->addr.sin_addr.s_addr & 0xFF000000) >> 24,
-          client->addr.sin_port,
-          client->fd);
+  int count = 0;
+
+  count = dprintf (fd, "%d.%d.%d.%d:%d",
+                   (client->addr.sin_addr.s_addr & 0x000000FF) >>  0,
+                   (client->addr.sin_addr.s_addr & 0x0000FF00) >>  8,
+                   (client->addr.sin_addr.s_addr & 0x00FF0000) >> 16,
+                   (client->addr.sin_addr.s_addr & 0xFF000000) >> 24,
+                   client->addr.sin_port);
+
+  dprintf (fd, "%.*s", 29 - count, BLANKSTR);
+  dprintf (fd, "%6d", client->fd);
+  dprintf (fd, GREEN  ("      %6u"),  client->counters.get_hit);
+  dprintf (fd, RED    ("       %6u"), client->counters.get_miss);
+  dprintf (fd, BLUE   ("%6u"),        client->counters.set);
+  dprintf (fd, YELLOW ("%6u"),        client->counters.del);
+  dprintf (fd, YELLOW ("%6u"),        client->counters.clr);
+
+  dprintf (fd, "\n");
 }
 
 void
-debug_print_clients ()
+debug_print_clients (int fd)
 {
+  int count = 0;
+
   for (u32 i = 0; i < MAX_NUM_CLIENTS; ++i)
-    debug_print_client (&clients[i]);
+    {
+      if (clients[i].fd != -1)
+        ++count;
+    }
+
+  count = dprintf (fd, "CLIENTS (%d) ", count);
+  dprintf (fd, "%.*s\n", LINEWIDTH - count, HLINESTR);
+
+  dprintf (fd, "%s",   "HOST");
+  dprintf (fd, "%31s", "FD");
+  dprintf (fd, "%12s", "GET (HIT)");
+  dprintf (fd, "%13s", "GET (MISS)");
+  dprintf (fd, "%6s", "SET");
+  dprintf (fd, "%6s", "DEL");
+  dprintf (fd, "%6s", "CLR");
+  dprintf (fd, "\n");
+
+  for (u32 i = 0; i < MAX_NUM_CLIENTS; ++i)
+    {
+      if (clients[i].fd != -1)
+        debug_print_client (fd, &clients[i]);
+    }
+
+  dprintf (fd, "\n");
 }

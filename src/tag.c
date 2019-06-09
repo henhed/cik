@@ -4,6 +4,7 @@
 
 #include "tag.h"
 #include "memory.h"
+#include "print.h"
 
 #if DEBUG
 # include <assert.h>
@@ -395,7 +396,11 @@ debug_print_tags (int fd)
 
   qsort (debug_tags, debug_tag_nmemb, sizeof (DebugTag), cmp_debug_tag);
 
-  dprintf (fd, "TAGS %-6u %59s  %s\n", debug_tag_nmemb, "KEYS", "DEPTH");
+  int count = 0;
+  count = dprintf (fd, "TAGS (%u) ", debug_tag_nmemb);
+  dprintf (fd, "%.*s\n", LINEWIDTH - count, HLINESTR);
+
+  dprintf (fd, "NAME %66s  %s\n", "KEYS", "DEPTH");
   for (u32 i = 0; i < debug_tag_nmemb; ++i)
     {
       DebugTag *dt = &debug_tags[i];
@@ -403,9 +408,11 @@ debug_print_tags (int fd)
                dt->tag.nmemb, dt->tag.base,
                dt->num_keys,  dt->tree_depth);
 
-      if (i == 19)
-        break; // Only print top 20
+      if (i == 9)
+        break; // Only print top 10
     }
+
+  dprintf (fd, "\n");
 
 #if 0 // Print tree
   debug_print_tag (fd, &root, 2);
