@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -18,6 +19,7 @@ volatile atomic_bool quit;
 
 static void sigint_handler (int);
 static void test_hash_map (void);
+static bool write_entry_as_set_request_callback (CacheEntry *, int *);
 
 int
 main (int argc, char **argv)
@@ -52,12 +54,22 @@ main (int argc, char **argv)
       return EXIT_FAILURE;
     }
 
-  FILE *info_file = fopen ("info.txt", "w");
+  FILE *info_file = fopen  ("info.txt", "w");
   int   info_fd   = fileno (info_file);
+
+  int persistence_fd = open ("persistent.requestlog", O_RDWR | O_CREAT);
+  if (persistence_fd < 0)
+    {
+      fprintf (stderr, "Could not open persistent.requestlog: %s\n",
+               strerror (errno));
+      return EXIT_FAILURE;
+    }
 
   ////////////////////////////////////////
   // ... Profit
   test_hash_map (); // @Temporary
+
+  load_request_log (persistence_fd);
 
   while (!atomic_load (&quit))
     {
@@ -75,6 +87,14 @@ main (int argc, char **argv)
 
   printf ("\nShutting down ..\n");
 
+  // Persist current state
+  ftruncate (persistence_fd, 0);
+  lseek (persistence_fd, SEEK_SET, 0);
+  walk_entries (entry_map,
+                (CacheEntryWalkCb) write_entry_as_set_request_callback,
+                &persistence_fd);
+  close (persistence_fd);
+
   fclose (info_file);
   stop_server ();
   release_all_memory ();
@@ -87,6 +107,52 @@ sigint_handler (int sig)
 {
   signal (sig, SIG_DFL);
   atomic_store (&quit, true);
+}
+
+static bool
+write_entry_as_set_request_callback (CacheEntry *entry, int *fd)
+{
+  Request request;
+  request.cik[0]        = CONTROL_BYTE_1;
+  request.cik[1]        = CONTROL_BYTE_2;
+  request.cik[2]        = CONTROL_BYTE_3;
+  request.op            = CMD_BYTE_SET;
+  request.s.klen        = entry->key.nmemb;
+  request.s.ntags       = entry->tags.nmemb;
+  request.s._padding[0] = 0;
+  request.s._padding[1] = 0;
+  request.s.vlen        = htonl (entry->value.nmemb);
+  request.s.ttl         = htonl (0xFFFFFFFF);
+
+  if (entry->expiry != CACHE_EXPIRY_INIT)
+    {
+      time_t now = time (NULL);
+      if (entry->expiry < now)
+        return false;
+      request.s.ttl = htonl (entry->expiry - now);
+    }
+
+  write (*fd, &request, sizeof (request));
+  write (*fd, entry->key.base, entry->key.nmemb);
+  for (u8 t = 0; t < entry->tags.nmemb; ++t)
+    {
+      u8 tlen = entry->tags.base[t].nmemb;
+      write (*fd, &tlen, sizeof (tlen));
+      write (*fd, entry->tags.base[t].base, tlen);
+    }
+  write (*fd, entry->value.base, entry->value.nmemb);
+
+  return false;
+}
+
+static bool
+test_walk_entries (CacheEntry *entry, void *user_data)
+{
+  (void) user_data;
+  assert (entry);
+  fprintf (stderr, "%s: got called: %.*s\n", __FUNCTION__,
+           entry->key.nmemb, entry->key.base);
+  return false;
 }
 
 static void
@@ -152,4 +218,6 @@ test_hash_map ()
   UNLOCK_ENTRY (unset);
   unset = lock_and_unset_cache_entry (entry_map, mykey1);
   assert (unset == NULL);
+
+  walk_entries (entry_map, test_walk_entries, NULL);
 }

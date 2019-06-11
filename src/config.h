@@ -1,7 +1,9 @@
 #ifndef CONFIG_H
 #define CONFIG_H 1
 
-#define DEBUG 1
+#ifndef DEBUG
+# define DEBUG 0
+#endif
 
 // This config amounts roughly 2G memory
 // 512K entries of size 256 Bytes
@@ -20,6 +22,6 @@
 #define NUM_WORKERS        0x10
 #define MAX_NUM_CLIENTS    0x100
 #define MAX_NUM_EVENTS     0x100
-#define WORKER_SLEEPY_TIME 10000000 // 10 ms
+#define WORKER_SLEEPY_TIME 1000000 // 1 ms
 
 #endif /* ! CONFIG_H */

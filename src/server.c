@@ -406,6 +406,7 @@ handle_set_request (Client *client, Request *request)
 
   if (old_entry)
     {
+      // @Incomplete: Remove tag associations for old entry
       UNLOCK_ENTRY (old_entry);
       release_memory (old_entry);
     }
@@ -484,6 +485,66 @@ handle_del_request (Client *client, Request *request)
   return delete_entry_by_key (key);
 }
 
+static bool
+clear_all_callback (CacheEntry *entry, void *user_data)
+{
+  (void) user_data;
+
+#if DEBUG
+  assert (entry);
+  printf (YELLOW ("DEL") "[%X]: '%.*s'\n",
+          current_worker->id, entry->key.nmemb, entry->key.base);
+#endif
+
+  for (u8 t = 0; t < entry->tags.nmemb; ++t)
+    remove_key_from_tag (entry->tags.base[t], entry->key);
+
+  UNLOCK_ENTRY (entry);
+  release_memory (entry);
+
+  return true; // 'true' tells map to unset the entry
+}
+
+static bool
+clear_old_callback (CacheEntry *entry, time_t *now)
+{
+#if DEBUG
+  assert (entry);
+  assert (now);
+#endif
+
+  if ((entry->expiry == CACHE_EXPIRY_INIT)
+      || (entry->expiry >= *now))
+    return false;
+
+  return clear_all_callback (entry, NULL);
+}
+
+static bool
+clear_non_matching_callback (CacheEntry *entry, CacheTagArray *tags)
+{
+#if DEBUG
+  assert (entry);
+  assert (tags);
+#endif
+
+  for (u8 i = 0; i < tags->nmemb; ++i)
+    {
+      CacheTag *want = &tags->base[i];
+      for (u8 j = 0; j < entry->tags.nmemb; ++j)
+        {
+          CacheTag *have = &entry->tags.base[j];
+          if ((want->nmemb == have->nmemb)
+              && (memcmp (want->base, have->base, have->nmemb) == 0))
+            {
+              return false;
+            }
+        }
+    }
+
+  return clear_all_callback (entry, NULL);
+}
+
 static StatusCode
 handle_clr_request (Client *client, Request *request)
 {
@@ -502,16 +563,39 @@ handle_clr_request (Client *client, Request *request)
 
   switch (mode)
     {
-    case CLEAR_MODE_MATCH_NONE: // Is there a good use case for this? (fallthrough)
     case CLEAR_MODE_ALL:
-      return STATUS_BUG; // Not implemented
+#if DEBUG
+        printf (YELLOW ("CLR") "[%X]: (MATCH ALL)\n", current_worker->id);
+#endif
+      walk_entries (entry_map, clear_all_callback, NULL);
+      return STATUS_OK;
     case CLEAR_MODE_OLD:
-      return STATUS_BUG; // Not implemented
+      {
+        time_t now = time (NULL);
+#if DEBUG
+        printf (YELLOW ("CLR") "[%X]: (MATCH OLD)\n", current_worker->id);
+#endif
+        walk_entries (entry_map, (CacheEntryWalkCb) clear_old_callback, &now);
+        return STATUS_OK;
+      }
+    case CLEAR_MODE_MATCH_NONE:
+      {
+        CacheTagArray tag_array = { .base = tags, .nmemb = ntags };
+#if DEBUG
+        printf (YELLOW ("CLR") "[%X]: (MATCH NONE)", current_worker->id);
+        for (u8 t = 0; t < ntags; ++t)
+          printf (" '%.*s'", tags[t].nmemb, tags[t].base);
+        printf ("\n");
+#endif
+        walk_entries (entry_map,
+                      (CacheEntryWalkCb) clear_non_matching_callback,
+                      &tag_array);
+        return STATUS_OK;
+      }
     case CLEAR_MODE_MATCH_ALL: // Intentional fallthrough
     case CLEAR_MODE_MATCH_ANY:
       {
         KeyNode *keys = NULL;
-
 #if DEBUG
         printf (YELLOW ("CLR") "[%X]: (MATCH %s)", current_worker->id,
                 (mode == CLEAR_MODE_MATCH_ALL) ? "ALL" : "ANY");
@@ -519,7 +603,6 @@ handle_clr_request (Client *client, Request *request)
           printf (" '%.*s'", tags[t].nmemb, tags[t].base);
         printf ("\n");
 #endif
-
         keys = (mode == CLEAR_MODE_MATCH_ALL)
           ? get_keys_matching_all_tags (tags, ntags)
           : get_keys_matching_any_tag  (tags, ntags);
@@ -567,6 +650,41 @@ handle_request (Client *client, Request *request, Payload **response_payload)
     default:
       return STATUS_PROTOCOL_ERROR;
     }
+}
+
+void
+load_request_log (int fd)
+{
+  // This is assumed to be called from the main thread!
+
+  Client     client;
+  Worker     worker;
+  Request    request;
+  StatusCode status;
+
+  client.fd = fd;
+  worker.id = (u32) -1;
+  current_worker = &worker;
+
+  status = init_payload_buffer ();
+#if DEBUG
+  assert (status == STATUS_OK);
+#else
+  (void) status;
+#endif
+
+  while (0 != read (fd, &request, sizeof (request)))
+    {
+      Payload *ignored = NULL;
+      status = handle_request (&client, &request, &ignored);
+#if DEBUG
+      assert (status == STATUS_OK);
+#endif
+    }
+
+  release_memory (payload_buffer.base);
+  payload_buffer_cap = 0;
+  payload_buffer     = (Payload) { .base = NULL, .nmemb = 0 };
 }
 
 static int

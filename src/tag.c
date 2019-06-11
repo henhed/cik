@@ -370,17 +370,23 @@ debug_print_tags (int fd)
     {
       while (current != NULL)
         {
+#if DEBUG
           assert (stack_nmemb < stack_cap);
+#endif
           stack[stack_nmemb++] = current;
           current = current->left;
         }
 
+#if DEBUG
       assert (stack_nmemb > 0);
+#endif
       current = stack[--stack_nmemb];
 
       {
         DebugTag *dt = NULL;
+#if DEBUG
         assert (debug_tag_nmemb < debug_tag_cap);
+#endif
         dt = &debug_tags[debug_tag_nmemb++];
 
         dt->tag        = current->tag;

@@ -10,8 +10,8 @@ SOURCES = $(shell find $(SRC_PATH) -name '*.$(SRC_EXT)' | sort -k 1nr | cut -f2-
 OBJECTS = $(SOURCES:$(SRC_PATH)/%.$(SRC_EXT)=$(BUILD_PATH)/%.o)
 DEPS = $(OBJECTS:.o=.d)
 
-COMPILER_FLAGS = -std=c11 -Wall -Wextra -Werror -D_GNU_SOURCE -ggdb
-#COMPILER_FLAGS = -std=c11 -Wall -Wextra -Werror -Winline -O3 -D_GNU_SOURCE
+COMPILER_FLAGS = -std=c11 -Wall -Wextra -Werror -D_GNU_SOURCE -ggdb -DDEBUG=1
+#COMPILER_FLAGS = -std=c11 -Wall -Wextra -Werror -Winline -O3 -D_GNU_SOURCE -DDEBUG=0
 INCLUDES = -I include/
 LIBS = -pthread
 LDFLAGS =

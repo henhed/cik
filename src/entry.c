@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "entry.h"
+#include "print.h"
 
 #if DEBUG
 # include <assert.h>
@@ -9,10 +10,10 @@
 #endif
 
 #define LOCK_SLOT(m, s) \
-  do {} while (atomic_flag_test_and_set_explicit (&(map)->guards[slot], \
+  do {} while (atomic_flag_test_and_set_explicit (&(map)->guards[s], \
                                                   memory_order_acquire))
 #define UNLOCK_SLOT(m, s) \
-  atomic_flag_clear_explicit (&(m)->guards[slot], memory_order_release)
+  atomic_flag_clear_explicit (&(m)->guards[s], memory_order_release)
 
 static inline u32
 get_hash (const u8 *base, u32 nmemb)
@@ -287,6 +288,53 @@ set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
   UNLOCK_SLOT (map, pos);
 
   return true;
+}
+
+void
+walk_entries (CacheEntryHashMap *map, CacheEntryWalkCb callback,
+              void *user_data)
+{
+#if DEBUG
+  assert (map);
+#endif
+
+  for (u32 pos = 0; pos < MAX_NUM_CACHE_ENTRIES; ++pos)
+    {
+      LOCK_SLOT (map, pos);
+      if (map->mask[pos])
+        {
+          CacheEntry *entry = map->entries[pos];
+#if DEBUG
+          assert (entry != NULL);
+#endif
+          if (!TRY_LOCK_ENTRY (entry))
+            {
+#if DEBUG
+              fprintf (stderr, "%s: SPINNING \"%.*s\"\n",
+                       __FUNCTION__, entry->key.nmemb, entry->key.base);
+#endif
+              LOCK_ENTRY (entry);
+#if DEBUG
+              fprintf (stderr, "%s: GOT LOCK \"%.*s\"\n",
+                       __FUNCTION__, entry->key.nmemb, entry->key.base);
+#endif
+            }
+
+          if (callback (entry, user_data))
+            {
+              // Caller now owns entry lock
+              map->mask[pos] = false;
+              map->hashes[pos] = 0;
+              map->entries[pos] = NULL;
+              atomic_fetch_sub (&map->nmemb, 1);
+            }
+          else
+            {
+              UNLOCK_ENTRY (entry);
+            }
+        }
+      UNLOCK_SLOT (map, pos);
+    }
 }
 
 void
