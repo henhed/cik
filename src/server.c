@@ -19,18 +19,23 @@
 # include <assert.h>
 #endif
 
+typedef struct sockaddr    sockaddr_t;
+typedef struct sockaddr_in sockaddr_in_t;
+typedef struct epoll_event epoll_event_t;
+
 typedef struct
 {
   int fd;
+  int epfd;
   atomic_bool is_running;
   thrd_t accept_thread;
-  struct sockaddr_in addr;
+  sockaddr_in_t addr;
 } Server;
 
 typedef struct
 {
   int fd;
-  struct sockaddr_in addr;
+  sockaddr_in_t addr;
   socklen_t addrlen;
   struct {
     u32 get_hit;
@@ -65,22 +70,25 @@ static void       close_client           (Client *);
 int
 start_server ()
 {
+  epoll_event_t event = { 0 };
+  int enable_tcp_nodelay = 1;
+
   for (u32 i = 0; i < MAX_NUM_CLIENTS; ++i)
     clients[i].fd = -1;
 
-  server.fd = socket (AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+  server.fd = socket (AF_INET, SOCK_STREAM, 0);
   if (server.fd < 0)
     return errno;
 
-  int on = 1;
-  if (0 > setsockopt (server.fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof (on)))
+  if (0 > setsockopt (server.fd, IPPROTO_TCP, TCP_NODELAY, &enable_tcp_nodelay,
+                      sizeof (enable_tcp_nodelay)))
     fprintf (stderr, "Could not enable TCP_NODELAY: %s\n", strerror (errno));
 
   server.addr.sin_family = AF_INET;
   server.addr.sin_addr.s_addr = INADDR_ANY;
   server.addr.sin_port = htons (SERVER_PORT);
 
-  if (0 > bind (server.fd, (struct sockaddr *) &server.addr, sizeof (server.addr)))
+  if (0 > bind (server.fd, (sockaddr_t *) &server.addr, sizeof (server.addr)))
     {
       close (server.fd);
       return errno;
@@ -88,6 +96,22 @@ start_server ()
 
   if (0 > listen (server.fd, SERVER_BACKLOG))
     {
+      close (server.fd);
+      return errno;
+    }
+
+  server.epfd = epoll_create (1); // Size is actually ignored here
+  if (0 > server.epfd)
+    {
+      close (server.fd);
+      return errno;
+    }
+
+  event.events = EPOLLIN;
+  event.data.ptr = &server;
+  if (0 > epoll_ctl (server.epfd, EPOLL_CTL_ADD, server.fd, &event))
+    {
+      close (server.epfd);
       close (server.fd);
       return errno;
     }
@@ -116,7 +140,7 @@ start_server ()
 }
 
 static int
-maybe_accept_new_connection (Server *server)
+wait_for_new_connection (Server *server)
 {
   PROFILE (PROF_SERVER_ACCEPT);
 
@@ -124,7 +148,29 @@ maybe_accept_new_connection (Server *server)
 
   Worker *worker = NULL;
   Client *client = NULL;
-  struct epoll_event event = { 0 };
+  epoll_event_t event = { 0 };
+  int nevents;
+
+  nevents = epoll_wait (server->epfd, &event, 1, WORKER_EPOLL_TIMEOUT);
+  if (nevents < 0)
+    {
+      fprintf (stderr, "%s: epoll_wait failed: %s\n",
+               __FUNCTION__, strerror (errno));
+      return -nevents;
+    }
+  else if (nevents == 0)
+    {
+      return 0;
+    }
+  else if (~event.events & EPOLLIN)
+    {
+      fprintf (stderr, "%s: Unexpected epoll event: 0x%X\n",
+               __FUNCTION__, event.events);
+      return 0;
+    }
+#if DEBUG
+  assert (event.data.ptr == server); // Sanity check
+#endif
 
   if (num_clients < MAX_NUM_CLIENTS)
     client = &clients[num_clients++];
@@ -147,7 +193,7 @@ maybe_accept_new_connection (Server *server)
 
   client->addrlen = sizeof (client->addr);
   client->fd = accept (server->fd,
-                       (struct sockaddr *) &client->addr,
+                       (sockaddr_t *) &client->addr,
                        &client->addrlen);
   if (client->fd < 0)
     return errno;
@@ -156,6 +202,7 @@ maybe_accept_new_connection (Server *server)
 
   worker = &workers[worker_id];
 
+  event = (epoll_event_t) { 0 };
   event.events = EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP;
   event.data.ptr = client;
   if (0 > epoll_ctl (worker->epfd, EPOLL_CTL_ADD, client->fd, &event))
@@ -172,13 +219,8 @@ maybe_accept_new_connection (Server *server)
 static int
 run_accept_thread (Server *server)
 {
-  struct timespec delay = {.tv_sec = 0, .tv_nsec = WORKER_SLEEPY_TIME};
-
   while (atomic_load (&server->is_running))
-    {
-      maybe_accept_new_connection (server);
-      thrd_sleep (&delay, NULL);
-    }
+    wait_for_new_connection (server);
 
   return thrd_success;
 }
@@ -692,8 +734,9 @@ process_worker_events (Worker *worker)
 {
   PROFILE (PROF_SERVER_READ);
 
-  struct epoll_event events[MAX_NUM_EVENTS] = {{ 0 }};
-  int nevents = epoll_wait (worker->epfd, events, MAX_NUM_EVENTS, 0);
+  epoll_event_t events[MAX_NUM_EVENTS] = {{ 0 }};
+  int nevents = epoll_wait (worker->epfd, events,
+                            MAX_NUM_EVENTS, WORKER_EPOLL_TIMEOUT);
   if (nevents < 0)
     {
       fprintf (stderr, "%s: epoll_wait failed: %s\n",
@@ -703,7 +746,7 @@ process_worker_events (Worker *worker)
 
   for (int i = 0; i < nevents; ++i)
     {
-      struct epoll_event *event = &events[i];
+      epoll_event_t *event = &events[i];
 
       if (event->events & (EPOLLERR | EPOLLHUP))
         {
@@ -790,8 +833,6 @@ process_worker_events (Worker *worker)
 static int
 run_worker (Worker *worker)
 {
-  struct timespec delay = {.tv_sec = 0, .tv_nsec = WORKER_SLEEPY_TIME};
-
   current_worker = worker;
 
   worker->epfd = epoll_create (MAX_NUM_CLIENTS); // Size is actually ignored here
@@ -802,10 +843,7 @@ run_worker (Worker *worker)
     }
 
   while (atomic_load (&server.is_running))
-    {
-      process_worker_events (worker);
-      thrd_sleep (&delay, NULL);
-    }
+    process_worker_events (worker);
 
   close (worker->epfd);
 
@@ -829,6 +867,7 @@ stop_server ()
 
   for (u32 i = 0; i < MAX_NUM_CLIENTS; ++i)
     close_client (&clients[i]);
+  close (server.epfd);
   close (server.fd);
 }
 
