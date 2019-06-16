@@ -184,12 +184,7 @@ reserve_and_lock_entry (size_t payload_size)
 
   entry = reserve_memory (total_size);
   if (entry == NULL)
-    {
-      // @Incomplete: Evict something old if entry is NULL here we should never
-      // fail to allocate an entry I think.
-      assert (false);
-      return NULL;
-    }
+    return NULL;
 
   *entry = CACHE_ENTRY_INIT;
   LOCK_ENTRY (entry);

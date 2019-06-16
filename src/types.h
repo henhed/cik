@@ -72,7 +72,8 @@ typedef struct
   CacheKey key;
   CacheTagArray tags;
   CacheValue value;
-  time_t expiry;
+  time_t mtime;
+  time_t expires;
   atomic_flag guard;
 } CacheEntry;
 
@@ -93,6 +94,15 @@ typedef enum
   CLEAR_MODE_MATCH_NONE = 0x03,
   CLEAR_MODE_MATCH_ANY  = 0x04
 } ClearMode;
+
+typedef enum
+{
+  LIST_MODE_ALL_IDS    = 0x00,
+  LIST_MODE_ALL_TAGS   = 0x01,
+  LIST_MODE_MATCH_ALL  = 0x02,
+  LIST_MODE_MATCH_NONE = 0x03,
+  LIST_MODE_MATCH_ANY  = 0x04
+} ListMode;
 
 typedef enum
 {
@@ -164,7 +174,7 @@ get_status_code_name (StatusCode code)
 // char[3]      0               'CiK' (Sanity)
 // char         3               'd'   (OP code)
 // u8           4               Key length
-// u8[11]       6               Padding
+// u8[11]       5               Padding
 // void *       16              (key)
 
 // :CLR
@@ -175,6 +185,21 @@ get_status_code_name (StatusCode code)
 // u8[10]       6               Padding
 // void *       10              (tags)
 
+// :LST
+// char[3]      0               'CiK' (Sanity)
+// char         3               'l'   (OP code)
+// u8           4               ListMode
+// u8           5               Tag Count
+// u8[10]       6               Padding
+// void *       16              (tags)
+
+// :NFO
+// char[3]      0               'CiK' (Sanity)
+// char         3               'n'   (OP code)
+// u8           4               Key length
+// u8[11]       5               Padding
+// void *       16              (key)
+
 #define CONTROL_BYTE_1 0x43 // 'C'
 #define CONTROL_BYTE_2 0x69 // 'i'
 #define CONTROL_BYTE_3 0x4B // 'K'
@@ -182,11 +207,13 @@ get_status_code_name (StatusCode code)
 #define CMD_BYTE_SET   0x73 // 's'
 #define CMD_BYTE_DEL   0x64 // 'd'
 #define CMD_BYTE_CLR   0x63 // 'c'
+#define CMD_BYTE_LST   0x6C // 'l'
+#define CMD_BYTE_NFO   0x6E // 'n'
 #define SUCCESS_BYTE   0x74 // 't'
 #define FAILURE_BYTE   0x66 // 'f'
 
-#define GET_FLAG_NONE          0x00
-#define GET_FLAG_IGNORE_EXPIRY 0x01
+#define GET_FLAG_NONE           0x00
+#define GET_FLAG_IGNORE_EXPIRES 0x01
 
 typedef struct __attribute__((packed))
 {
@@ -202,9 +229,9 @@ typedef struct __attribute__((packed))
     } g;
     struct __attribute__((packed))
     {
-      u8 klen;
-      u8 ntags;
-      u8 _padding[2];
+      u8  klen;
+      u8  ntags;
+      u8  _padding[2];
       u32 vlen;
       u32 ttl;
     } s;
@@ -219,6 +246,17 @@ typedef struct __attribute__((packed))
       u8 ntags;
       u8 _padding[10];
     } c;
+    struct __attribute__((packed))
+    {
+      u8 mode;
+      u8 ntags;
+      u8 _padding[10];
+    } l;
+    struct __attribute__((packed))
+    {
+      u8 klen;
+      u8 _padding[11];
+    } n;
   };
 } Request;
 
@@ -238,6 +276,11 @@ typedef struct __attribute__((packed))
    && (sizeof (request.c.mode) == 1)            \
    && (sizeof (request.c.ntags) == 1)           \
    && (sizeof (request.c._padding) == 10)       \
+   && (sizeof (request.l.mode) == 1)            \
+   && (sizeof (request.l.ntags) == 1)           \
+   && (sizeof (request.l._padding) == 10)       \
+   && (sizeof (request.n.klen) == 1)            \
+   && (sizeof (request.n._padding) == 11)       \
    && (offsetof (Request, cik) == 0)            \
    && (offsetof (Request, op) == 3)             \
    && (offsetof (Request, g.klen) == 4)         \
@@ -252,6 +295,11 @@ typedef struct __attribute__((packed))
    && (offsetof (Request, c.mode) == 4)         \
    && (offsetof (Request, c.ntags) == 5)        \
    && (offsetof (Request, c._padding) == 6)     \
+   && (offsetof (Request, l.mode) == 4)         \
+   && (offsetof (Request, l.ntags) == 5)        \
+   && (offsetof (Request, l._padding) == 6)     \
+   && (offsetof (Request, n.klen) == 4)         \
+   && (offsetof (Request, n._padding) == 5)     \
    )
 
 typedef struct __attribute__((packed))
@@ -264,6 +312,24 @@ typedef struct __attribute__((packed))
     u32 error_code;   // Error code if status = f
   };
 } Response;
+
+typedef struct __attribute__((packed))
+{
+  union __attribute__((packed))
+  {
+    struct __attribute__((packed))
+    {
+      // @Incomplete: server info members
+      u8 _padding[16];
+    } server;
+    struct __attribute__((packed))
+    {
+      u64 expires;
+      u64 mtime;
+      u8  stream_of_tags[];
+    } entry;
+  };
+} NFOResponsePayload;
 
 #define IS_RESPONSE_STRUCT_VALID(response)      \
   ((sizeof (response) == 8)                     \

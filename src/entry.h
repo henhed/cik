@@ -3,17 +3,19 @@
 
 #include "types.h"
 
-#define CACHE_KEY_INIT    { 0 }
-#define CACHE_VALUE_INIT  { 0 }
-#define CACHE_TAGS_INIT   { 0 }
-#define CACHE_EXPIRY_INIT ((time_t) -1)
+#define CACHE_KEY_INIT     { 0 }
+#define CACHE_VALUE_INIT   { 0 }
+#define CACHE_TAGS_INIT    { 0 }
+#define CACHE_EXPIRES_INIT ((time_t) -1)
+#define CACHE_MTIME_INIT   (time (NULL))
 
 #define CACHE_ENTRY_INIT (CacheEntry) { \
-  .key    = CACHE_KEY_INIT,             \
-  .tags   = CACHE_TAGS_INIT,            \
-  .value  = CACHE_VALUE_INIT,           \
-  .expiry = CACHE_EXPIRY_INIT,          \
-  .guard  = ATOMIC_FLAG_INIT            \
+  .key     = CACHE_KEY_INIT,            \
+  .tags    = CACHE_TAGS_INIT,           \
+  .value   = CACHE_VALUE_INIT,          \
+  .expires = CACHE_EXPIRES_INIT,        \
+  .mtime   = CACHE_MTIME_INIT,          \
+  .guard   = ATOMIC_FLAG_INIT           \
 }
 
 #define LOCK_ENTRY(e) \

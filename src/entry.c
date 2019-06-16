@@ -341,14 +341,16 @@ void
 debug_print_entry (CacheEntry *entry)
 {
 #if DEBUG
-  bool expires = (entry->expiry != CACHE_EXPIRY_INIT);
+  bool expires = (entry->expires != CACHE_EXPIRES_INIT);
   printf ("%s: Content is: {\n"
           " TTL: %ld\n"
+          " MTIME: %ld\n"
           " TAGS: %u\n"
           " KEY: \"%.*s\"\n"
           " VAL: \"%.*s\"\n}\n",
           __FUNCTION__,
-          expires ? (entry->expiry - time (NULL)) : -1,
+          expires ? (entry->expires - time (NULL)) : -1,
+          entry->mtime,
           entry->tags.nmemb,
           entry->key.nmemb, entry->key.base,
           entry->value.nmemb, entry->value.base

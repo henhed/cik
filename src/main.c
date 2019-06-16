@@ -124,12 +124,12 @@ write_entry_as_set_request_callback (CacheEntry *entry, int *fd)
   request.s.vlen        = htonl (entry->value.nmemb);
   request.s.ttl         = htonl (0xFFFFFFFF);
 
-  if (entry->expiry != CACHE_EXPIRY_INIT)
+  if (entry->expires != CACHE_EXPIRES_INIT)
     {
       time_t now = time (NULL);
-      if (entry->expiry < now)
+      if (entry->expires < now)
         return false;
-      request.s.ttl = htonl (entry->expiry - now);
+      request.s.ttl = htonl (entry->expires - now);
     }
 
   write (*fd, &request, sizeof (request));

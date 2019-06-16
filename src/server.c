@@ -19,6 +19,14 @@
 # include <assert.h>
 #endif
 
+#if __BIG_ENDIAN__
+# define htonll(x) (x)
+# define ntohll(x) (x)
+#else
+# define htonll(x) (((u64) htonl ((x) & 0xFFFFFFFF) << 32) | htonl ((x) >> 32))
+# define ntohll(x) (((u64) ntohl ((x) & 0xFFFFFFFF) << 32) | ntohl ((x) >> 32))
+#endif
+
 typedef struct sockaddr    sockaddr_t;
 typedef struct sockaddr_in sockaddr_in_t;
 typedef struct epoll_event epoll_event_t;
@@ -43,6 +51,8 @@ typedef struct
     u32 set;
     u32 del;
     u32 clr;
+    u32 lst;
+    u32 nfo;
   } counters;
 } Client;
 
@@ -311,12 +321,17 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
       return STATUS_NOT_FOUND;
     }
 
-  if (~flags & GET_FLAG_IGNORE_EXPIRY)
+#if DEBUG
+  printf (GREEN ("GET") "[%X]: '%.*s'\n",
+          current_worker->id, klen, tmp_key_data);
+#endif
+
+  if (~flags & GET_FLAG_IGNORE_EXPIRES)
     {
-      if (entry->expiry != CACHE_EXPIRY_INIT)
+      if (entry->expires != CACHE_EXPIRES_INIT)
         {
           time_t now = time (NULL);
-          if (entry->expiry < now)
+          if (entry->expires < now)
             {
               UNLOCK_ENTRY (entry);
               return STATUS_EXPIRED;
@@ -324,8 +339,13 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
         }
     }
 
+  ++client->counters.get_hit;
+
   if (entry->value.nmemb > payload_buffer_cap)
-    return STATUS_BUG; // We should always have a buffer big enough
+    {
+      UNLOCK_ENTRY (entry);
+      return STATUS_BUG; // We should always have a buffer big enough
+    }
 
   if (entry->value.nmemb > 0)
     {
@@ -337,13 +357,6 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
     }
 
   UNLOCK_ENTRY (entry);
-
-#if DEBUG
-  printf (GREEN ("GET") "[%X]: '%.*s'\n",
-          current_worker->id, klen, tmp_key_data);
-#endif
-
-  ++client->counters.get_hit;
 
   return STATUS_OK;
 }
@@ -377,6 +390,8 @@ handle_set_request (Client *client, Request *request)
   // Right now we're always reserving new memory and releasing the old.
   // But who knows, maybe reserving new memory will be faster in the end.
 
+  // @Feature: Add TTL to existing entry
+
   status = read_tags_using_payload_buffer (client, tags, ntags);
   if (status != STATUS_OK)
     return status;
@@ -393,7 +408,13 @@ handle_set_request (Client *client, Request *request)
 
   entry = reserve_and_lock_entry (total_size);
   if (entry == NULL)
-    return STATUS_OUT_OF_MEMORY;
+    {
+#if DEBUG
+      fprintf (stderr, "%s: @Incomplete: Evict something (%.*s)\n", __FUNCTION__,
+               entry->key.nmemb, entry->key.base);
+#endif
+      return STATUS_OUT_OF_MEMORY;
+    }
 
   payload = (u8 *) (entry + 1);
 
@@ -431,14 +452,16 @@ handle_set_request (Client *client, Request *request)
       return status;
     }
 
+  entry->mtime = time (NULL);
+
   if (ttl != (u32) -1)
-    entry->expiry = time (NULL) + ttl;
+    entry->expires = entry->mtime + ttl;
 
   if (!set_locked_cache_entry (entry_map, entry, &old_entry))
     {
 #if DEBUG
       assert (old_entry == NULL);
-      fprintf (stderr, "%s: TODO: Evict something (%.*s)\n", __FUNCTION__,
+      fprintf (stderr, "%s: @Incomplete: Evict something (%.*s)\n", __FUNCTION__,
                entry->key.nmemb, entry->key.base);
 #endif
       UNLOCK_ENTRY (entry);
@@ -448,16 +471,16 @@ handle_set_request (Client *client, Request *request)
 
   if (old_entry)
     {
-      // @Incomplete: Remove tag associations for old entry
+      // @Speed: Only remove keys missing in new entry
+      for (u8 t = 0; t < old_entry->tags.nmemb; ++t)
+        remove_key_from_tag (old_entry->tags.base[t], old_entry->key);
       UNLOCK_ENTRY (old_entry);
       release_memory (old_entry);
     }
 
+  // @Speed: Only add tags missing in old entry
   for (u8 t = 0; t < entry->tags.nmemb; ++t)
-    {
-      // Maybe we don't need to keep the entry locked for this?
-      add_key_to_tag (entry->tags.base[t], entry->key);
-    }
+    add_key_to_tag (entry->tags.base[t], entry->key);
 
   UNLOCK_ENTRY (entry);
 
@@ -487,10 +510,7 @@ delete_entry_by_key (CacheKey key)
     return STATUS_NOT_FOUND;
 
   for (u8 t = 0; t < entry->tags.nmemb; ++t)
-    {
-      // Maybe we don't need to keep the entry locked for this?
-      remove_key_from_tag (entry->tags.base[t], entry->key);
-    }
+    remove_key_from_tag (entry->tags.base[t], entry->key);
 
   do
     {
@@ -555,8 +575,8 @@ clear_old_callback (CacheEntry *entry, time_t *now)
   assert (now);
 #endif
 
-  if ((entry->expiry == CACHE_EXPIRY_INIT)
-      || (entry->expiry >= *now))
+  if ((entry->expires == CACHE_EXPIRES_INIT)
+      || (entry->expires >= *now))
     return false;
 
   return clear_all_callback (entry, NULL);
@@ -663,6 +683,86 @@ handle_clr_request (Client *client, Request *request)
 }
 
 static StatusCode
+handle_lst_request (Client *client, Request *request, Payload **response_payload)
+{
+  // @Incomplete
+  ++client->counters.lst;
+  (void) request;
+  (void) response_payload;
+  return STATUS_BUG;
+}
+
+static StatusCode
+handle_nfo_request (Client *client, Request *request, Payload **response_payload)
+{
+  StatusCode          status;
+  NFOResponsePayload *nfo  = NULL;
+  u8                  klen = request->n.klen;
+
+  status = init_payload_buffer ();
+  if (status != STATUS_OK)
+    return status;
+
+  nfo = (NFOResponsePayload *) payload_buffer.base;
+  payload_buffer.nmemb = sizeof (*nfo);
+  *response_payload = &payload_buffer;
+
+  ++client->counters.nfo;
+
+  if (klen > 0)
+    {
+      CacheEntry *entry = NULL;
+      CacheKey    key;
+      u8          tmp_key_data[0xFF];
+      u8         *tag_data = nfo->entry.stream_of_tags;
+
+      // Read key
+      status = read_request_payload (client, tmp_key_data, klen);
+      if (status != STATUS_OK)
+        return status;
+
+      key.base = tmp_key_data;
+      key.nmemb = klen;
+
+      entry = lock_and_get_cache_entry (entry_map, key);
+      if (!entry)
+        return STATUS_NOT_FOUND;
+
+      nfo->entry.expires = htonll (entry->expires);
+      nfo->entry.mtime   = htonll (entry->mtime);
+
+      for (u8 t = 0; t < entry->tags.nmemb; ++t)
+        {
+          CacheTag *tag = &entry->tags.base[t];
+
+          if ((payload_buffer.nmemb + 1 + tag->nmemb) > payload_buffer_cap)
+            {
+              UNLOCK_ENTRY (entry);
+              return STATUS_BUG; // We should always have a buffer big enough
+            }
+
+          *(tag_data++) = tag->nmemb;
+          memcpy (tag_data, tag->base, tag->nmemb);
+          tag_data += tag->nmemb;
+          payload_buffer.nmemb += 1 + tag->nmemb;
+        }
+
+      UNLOCK_ENTRY (entry);
+      return STATUS_OK;
+    }
+  else
+    {
+      // @Incomplete: Filling percentage etc.
+#if DEBUG
+      printf (RED ("NFO") "[%X]: Not implemented for empty tag\n", current_worker->id);
+#endif
+      return STATUS_BUG;
+    }
+
+  return STATUS_BUG;
+}
+
+static StatusCode
 handle_request (Client *client, Request *request, Payload **response_payload)
 {
   PROFILE (PROF_HANDLE_REQUEST);
@@ -689,6 +789,10 @@ handle_request (Client *client, Request *request, Payload **response_payload)
       return handle_del_request (client, request);
     case CMD_BYTE_CLR:
       return handle_clr_request (client, request);
+    case CMD_BYTE_LST:
+      return handle_lst_request (client, request, response_payload);
+    case CMD_BYTE_NFO:
+      return handle_nfo_request (client, request, response_payload);
     default:
       return STATUS_PROTOCOL_ERROR;
     }
@@ -960,13 +1064,15 @@ debug_print_client (int fd, Client *client)
                    (client->addr.sin_addr.s_addr & 0xFF000000) >> 24,
                    client->addr.sin_port);
 
-  dprintf (fd, "%.*s", 29 - count, BLANKSTR);
-  dprintf (fd, "%6d", client->fd);
+  dprintf (fd, "%.*s", 19 - count, BLANKSTR);
+  dprintf (fd, "%4d", client->fd);
   dprintf (fd, GREEN  ("      %6u"),  client->counters.get_hit);
   dprintf (fd, RED    ("       %6u"), client->counters.get_miss);
   dprintf (fd, BLUE   ("%6u"),        client->counters.set);
   dprintf (fd, YELLOW ("%6u"),        client->counters.del);
   dprintf (fd, YELLOW ("%6u"),        client->counters.clr);
+  dprintf (fd, GREEN  ("%6u"),        client->counters.lst);
+  dprintf (fd, GREEN  ("%6u"),        client->counters.nfo);
 
   dprintf (fd, "\n");
 }
@@ -986,12 +1092,14 @@ debug_print_clients (int fd)
   dprintf (fd, "%.*s\n", LINEWIDTH - count, HLINESTR);
 
   dprintf (fd, "%s",   "HOST");
-  dprintf (fd, "%31s", "FD");
+  dprintf (fd, "%19s", "FD");
   dprintf (fd, "%12s", "GET (HIT)");
   dprintf (fd, "%13s", "GET (MISS)");
-  dprintf (fd, "%6s", "SET");
-  dprintf (fd, "%6s", "DEL");
-  dprintf (fd, "%6s", "CLR");
+  dprintf (fd, "%6s",  "SET");
+  dprintf (fd, "%6s",  "DEL");
+  dprintf (fd, "%6s",  "CLR");
+  dprintf (fd, "%6s",  "LST");
+  dprintf (fd, "%6s",  "NFO");
   dprintf (fd, "\n");
 
   for (u32 i = 0; i < MAX_NUM_CLIENTS; ++i)
