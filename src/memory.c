@@ -208,7 +208,8 @@ reserve_biggest_possible_payload (Payload *payload)
       payload->base = reserve_memory (size);
       if (payload->base != NULL)
         {
-          payload->nmemb = size;
+          payload->nmemb = 0;
+          payload->cap   = size;
           return true;
         }
     }

@@ -7,6 +7,7 @@
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <threads.h>
 #include <time.h>
 
 typedef int8_t   s8;
@@ -43,6 +44,7 @@ typedef struct
 {
   u8 *base;
   u32 nmemb;
+  u32 cap;
 } Payload;
 
 // Linked list
@@ -85,6 +87,44 @@ typedef struct
   u32 hashes[MAX_NUM_CACHE_ENTRIES];
   CacheEntry *entries[MAX_NUM_CACHE_ENTRIES];
 } CacheEntryHashMap;
+
+typedef struct sockaddr    sockaddr_t;
+typedef struct sockaddr_in sockaddr_in_t;
+typedef struct epoll_event epoll_event_t;
+
+typedef struct
+{
+  int fd;
+  int epfd;
+  atomic_bool is_running;
+  thrd_t accept_thread;
+  sockaddr_in_t addr;
+} Server;
+
+typedef struct
+{
+  thrd_t  thread;
+  u32     id;
+  int     epfd;
+  Payload payload_buffer;
+} Worker;
+
+typedef struct
+{
+  int           fd;
+  sockaddr_in_t addr;
+  socklen_t     addrlen;
+  Worker       *worker;
+  struct {
+    u32 get_hit;
+    u32 get_miss;
+    u32 set;
+    u32 del;
+    u32 clr;
+    u32 lst;
+    u32 nfo;
+  } counters;
+} Client;
 
 typedef enum
 {
