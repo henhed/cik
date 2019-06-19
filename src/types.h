@@ -20,7 +20,7 @@ typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
 
-typedef _Atomic volatile u32 u32atom;
+typedef _Atomic u32 u32atom;
 
 typedef struct
 {
@@ -59,8 +59,8 @@ typedef struct _TagNode
 {
   CacheTag tag;
   KeyNode *keys;
-  struct _TagNode *left;
-  struct _TagNode *right;
+  struct _TagNode * _Atomic left;
+  struct _TagNode * _Atomic right;
 } TagNode;
 
 typedef struct
@@ -107,6 +107,24 @@ typedef struct
   u32     id;
   int     epfd;
   Payload payload_buffer;
+  struct
+  {
+    u32 get;
+    u32 set;
+    u32 del;
+    u32 clr;
+    u32 lst;
+    u32 nfo;
+  } counters;
+  struct
+  {
+    u64 get;
+    u64 set;
+    u64 del;
+    u64 clr;
+    u64 lst;
+    u64 nfo;
+  } timers;
 } Worker;
 
 typedef struct

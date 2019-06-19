@@ -133,9 +133,9 @@ handle_set_request (Client *client, Request *request)
 
   u8  klen  = request->s.klen;
   u32 tlen  = 0;
-  u32 vlen  = request->s.vlen;
+  u32 vlen  = ntohl (request->s.vlen);
   u8  ntags = request->s.ntags;
-  u32 ttl   = request->s.ttl;
+  u32 ttl   = ntohl (request->s.ttl);
 
   u8      *payload;
   u8       tmp_key_data[0xFF];
@@ -524,7 +524,15 @@ handle_request (Client *client, Request *request, Payload **response_payload)
 {
   PROFILE (PROF_HANDLE_REQUEST);
 
+  StatusCode status;
+  Worker *worker;
+  u64 start_tick;
+
   if (!client || !request || !response_payload)
+    return STATUS_BUG;
+
+  worker = client->worker;
+  if (!worker)
     return STATUS_BUG;
 
   if ((request->cik[0] != CONTROL_BYTE_1)
@@ -534,22 +542,52 @@ handle_request (Client *client, Request *request, Payload **response_payload)
 
   *response_payload = NULL;
 
+  start_tick = get_performance_counter ();
+
   switch (request->op)
     {
     case CMD_BYTE_GET:
-      return handle_get_request (client, request, response_payload);
+      {
+        status = handle_get_request (client, request, response_payload);
+        worker->timers.get   += (get_performance_counter () - start_tick);
+        worker->counters.get += 1;
+        return status;
+      }
     case CMD_BYTE_SET:
-      request->s.vlen = ntohl (request->s.vlen);
-      request->s.ttl  = ntohl (request->s.ttl);
-      return handle_set_request (client, request);
+      {
+        status = handle_set_request (client, request);
+        worker->timers.set   += (get_performance_counter () - start_tick);
+        worker->counters.set += 1;
+        return status;
+      }
     case CMD_BYTE_DEL:
-      return handle_del_request (client, request);
+      {
+        status = handle_del_request (client, request);
+        worker->timers.del   += (get_performance_counter () - start_tick);
+        worker->counters.del += 1;
+        return status;
+      }
     case CMD_BYTE_CLR:
-      return handle_clr_request (client, request);
+      {
+        status = handle_clr_request (client, request);
+        worker->timers.clr   += (get_performance_counter () - start_tick);
+        worker->counters.clr += 1;
+        return status;
+      }
     case CMD_BYTE_LST:
-      return handle_lst_request (client, request, response_payload);
+      {
+        status = handle_lst_request (client, request, response_payload);
+        worker->timers.lst   += (get_performance_counter () - start_tick);
+        worker->counters.lst += 1;
+        return status;
+      }
     case CMD_BYTE_NFO:
-      return handle_nfo_request (client, request, response_payload);
+      {
+        status = handle_nfo_request (client, request, response_payload);
+        worker->timers.nfo   += (get_performance_counter () - start_tick);
+        worker->counters.nfo += 1;
+        return status;
+      }
     default:
       return STATUS_PROTOCOL_ERROR;
     }

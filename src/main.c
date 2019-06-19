@@ -79,6 +79,7 @@ main (int argc, char **argv)
       debug_print_memory (info_fd);
       debug_print_tags (info_fd);
       debug_print_clients (info_fd);
+      debug_print_workers (info_fd);
       sleep (1);
     }
 

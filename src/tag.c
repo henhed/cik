@@ -10,7 +10,7 @@
 # include <assert.h>
 #endif
 
-static u8 root_value[] = { 'R', 'O', 'O', 'T'  };
+static u8 root_value[] = { 'R', 'O', 'O', 'T' };
 static TagNode root = {
   .tag.base  = root_value,
   .tag.nmemb = sizeof (root_value),
@@ -25,7 +25,7 @@ keys_are_equal (CacheKey a, CacheKey b)
     return false;
   if (a.base == b.base)
     return true;
-  return (0 == memcmp (a.base, b.base, a.nmemb));
+  return (0 == memcmp (a.base, b.base, a.nmemb)) ? true : false;
 }
 
 static KeyNode *
@@ -40,6 +40,21 @@ create_key_node (CacheKey key)
       node->key.nmemb = key.nmemb;
       memcpy (node->key.base, key.base, key.nmemb);
     }
+  return node;
+}
+
+static TagNode *
+create_tag_node (CacheTag tag)
+{
+  TagNode *node;
+  node = reserve_memory (sizeof (TagNode) + (sizeof (u8) * tag.nmemb));
+#if DEBUG
+  assert (node != NULL);
+#endif
+  *node = (TagNode) { 0 };
+  node->tag.base = (u8 *) (node + 1);
+  node->tag.nmemb = tag.nmemb;
+  memcpy (node->tag.base, tag.base, tag.nmemb);
   return node;
 }
 
@@ -91,6 +106,9 @@ compare_tags (CacheTag a, CacheTag b)
   return result;
 }
 
+#define TAG_NODE_LEFT(t)  atomic_load (&(t)->left)
+#define TAG_NODE_RIGHT(t) atomic_load (&(t)->right)
+
 static TagNode *
 get_or_create_node (TagNode *parent, CacheTag tag)
 {
@@ -98,37 +116,53 @@ get_or_create_node (TagNode *parent, CacheTag tag)
   assert (parent);
 #endif
 
+  static TagNode *nulltag = NULL;
+
   for (;;)
     {
       int diff = compare_tags (tag, parent->tag);
-      if (diff == 0)
-        return parent;
-
-      if (((diff < 0) && (parent->left == NULL))
-          || ((diff > 0) && (parent->right == NULL)))
-        {
-          TagNode *node;
-          node = reserve_memory (sizeof (TagNode) + (sizeof (u8) * tag.nmemb));
-#if DEBUG
-          assert (node);
-#endif
-          *node = (TagNode) { 0 };
-          node->tag.base = (u8 *) (node + 1);
-          node->tag.nmemb = tag.nmemb;
-          memcpy (node->tag.base, tag.base, tag.nmemb);
-
-          if (diff < 0)
-            parent->left = node;
-          else
-            parent->right = node;
-
-          return node;
-        }
-
       if (diff < 0)
-        parent = parent->left;
+        {
+          TagNode *left = TAG_NODE_LEFT (parent);
+          if (left == NULL)
+            {
+              left = create_tag_node (tag);
+              if (!atomic_compare_exchange_strong (&parent->left, &nulltag, left))
+                {
+                  // We lost a race, release node
+                  release_memory (left);
+                  left = TAG_NODE_LEFT (parent);
+#if DEBUG
+                  fprintf (stderr, "Race to add tag: %.*s\n", tag.nmemb, tag.base);
+                  assert (left != NULL);
+#endif
+                }
+            }
+          parent = left;
+        }
+      else if (diff > 0)
+        {
+          TagNode *right = TAG_NODE_RIGHT (parent);
+          if (right == NULL)
+            {
+              right = create_tag_node (tag);
+              if (!atomic_compare_exchange_strong (&parent->right, &nulltag, right))
+                {
+                  // We lost a race, release node
+                  release_memory (right);
+                  right = TAG_NODE_RIGHT (parent);
+#if DEBUG
+                  fprintf (stderr, "Race to add tag: %.*s\n", tag.nmemb, tag.base);
+                  assert (right != NULL);
+#endif
+                }
+            }
+          parent = right;
+        }
       else
-        parent = parent->right;
+        {
+          return parent;
+        }
     }
 
 #if DEBUG
@@ -149,9 +183,9 @@ get_tag_if_exists (CacheTag tag)
         return current;
 
       if (diff < 0)
-        current = current->left;
+        current = TAG_NODE_LEFT (current);
       else
-        current = current->right;
+        current = TAG_NODE_RIGHT (current);
     }
 
   return NULL;
@@ -168,8 +202,7 @@ static KeyNode *
 copy_key_list (KeyNode *list)
 {
   KeyNode *new_list = NULL;
-  for (
-       KeyNode **node = &list, **copy = &new_list;
+  for (KeyNode **node = &list, **copy = &new_list;
        *node;
        node = &(*node)->next, copy = &(*copy)->next)
     {
@@ -374,7 +407,7 @@ debug_print_tags (int fd)
           assert (stack_nmemb < stack_cap);
 #endif
           stack[stack_nmemb++] = current;
-          current = current->left;
+          current = TAG_NODE_LEFT (current);
         }
 
 #if DEBUG
@@ -397,7 +430,7 @@ debug_print_tags (int fd)
           ++dt->num_keys;
       }
 
-      current = current->right;
+      current = TAG_NODE_RIGHT (current);
     }
 
   qsort (debug_tags, debug_tag_nmemb, sizeof (DebugTag), cmp_debug_tag);

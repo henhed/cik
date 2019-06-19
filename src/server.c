@@ -19,8 +19,8 @@ static Client clients[MAX_NUM_CLIENTS] = {{ 0 }};
 static size_t num_clients = 0;
 static Worker workers[NUM_WORKERS] = {{ 0 }};
 
-static int        run_worker             (Worker *);
-static int        run_accept_thread      (Server *);
+static int run_worker        (Worker *);
+static int run_accept_thread (Server *);
 
 int
 start_server ()
@@ -175,7 +175,10 @@ static int
 run_accept_thread (Server *server)
 {
   while (atomic_load (&server->is_running))
-    wait_for_new_connection (server);
+    {
+      wait_for_new_connection (server);
+      thrd_yield ();
+    }
 
   return thrd_success;
 }
@@ -201,6 +204,8 @@ load_request_log (int fd)
       status = handle_request (&client, &request, &ignored);
 #if DEBUG
       assert (status == STATUS_OK);
+#else
+      (void) status;
 #endif
     }
 
@@ -319,7 +324,10 @@ run_worker (Worker *worker)
     }
 
   while (atomic_load (&server.is_running))
-    process_worker_events (worker);
+    {
+      process_worker_events (worker);
+      thrd_yield ();
+    }
 
   close (worker->epfd);
   release_memory (worker->payload_buffer.base);
@@ -481,6 +489,64 @@ debug_print_clients (int fd)
     {
       if (clients[i].fd != -1)
         debug_print_client (fd, &clients[i]);
+    }
+
+  dprintf (fd, "\n");
+}
+
+void
+debug_print_workers (int fd)
+{
+  int count;
+  float to_ms = 1000.f / get_performance_frequency ();
+
+  count = dprintf (fd, "WORKERS (%d) ", NUM_WORKERS);
+  dprintf (fd, "%.*s\n", LINEWIDTH - count, HLINESTR);
+  dprintf (fd, "      GET    ");
+  dprintf (fd, " |    SET    ");
+  dprintf (fd, " |    DEL    ");
+  dprintf (fd, " |    CLR    ");
+  dprintf (fd, " |    LST    ");
+  dprintf (fd, " |    NFO    ");
+  dprintf (fd, "\n");
+
+  for (u32 i = 0; i < NUM_WORKERS; ++i)
+    {
+      Worker *worker = &workers[i];
+      float seconds;
+      float seconds_avg;
+
+      seconds = to_ms * worker->timers.get;
+      seconds_avg = worker->counters.get ? (seconds / worker->counters.get) : 0.f;
+      dprintf (fd, " %5u", worker->counters.get);
+      dprintf (fd, " %6.2f", seconds_avg);
+
+      seconds = to_ms * worker->timers.set;
+      seconds_avg = worker->counters.set ? (seconds / worker->counters.set) : 0.f;
+      dprintf (fd, " %5u", worker->counters.set);
+      dprintf (fd, " %6.2f", seconds_avg);
+
+      seconds = to_ms * worker->timers.del;
+      seconds_avg = worker->counters.del ? (seconds / worker->counters.del) : 0.f;
+      dprintf (fd, " %5u", worker->counters.del);
+      dprintf (fd, " %6.2f", seconds_avg);
+
+      seconds = to_ms * worker->timers.clr;
+      seconds_avg = worker->counters.clr ? (seconds / worker->counters.clr) : 0.f;
+      dprintf (fd, " %5u", worker->counters.clr);
+      dprintf (fd, " %6.2f", seconds_avg);
+
+      seconds = to_ms * worker->timers.lst;
+      seconds_avg = worker->counters.lst ? (seconds / worker->counters.lst) : 0.f;
+      dprintf (fd, " %5u", worker->counters.lst);
+      dprintf (fd, " %6.2f", seconds_avg);
+
+      seconds = to_ms * worker->timers.nfo;
+      seconds_avg = worker->counters.nfo ? (seconds / worker->counters.nfo) : 0.f;
+      dprintf (fd, " %5u", worker->counters.nfo);
+      dprintf (fd, " %6.2f", seconds_avg);
+
+      dprintf (fd, "\n");
     }
 
   dprintf (fd, "\n");
