@@ -89,6 +89,9 @@ main (int argc, char **argv)
 
   printf ("\nShutting down ..\n");
 
+  stop_server ();
+  fclose (info_file);
+
   // Persist current state
   ftruncate (persistence_fd, 0);
   lseek (persistence_fd, SEEK_SET, 0);
@@ -100,8 +103,6 @@ main (int argc, char **argv)
     }
   close (persistence_fd);
 
-  fclose (info_file);
-  stop_server ();
   release_all_memory ();
 
   return EXIT_SUCCESS;
@@ -198,7 +199,7 @@ test_hash_map ()
   entry2 = reserve_and_lock_entry (mykey1.nmemb + myval1.nmemb);
   entry2->key = mykey1; // !! Not pointing to reserved memory
   entry2->value = myval1; // !! Not pointing to reserved memory
-  set_locked_cache_entry (entry_maps[0], entry2, NULL);
+  set_locked_cache_entry (entry_maps[0], entry2, &old_entry);
   UNLOCK_ENTRY (entry2);
 
   CacheEntry *entry3;

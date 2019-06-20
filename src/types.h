@@ -20,8 +20,6 @@ typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
 
-typedef _Atomic u32 u32atom;
-
 typedef struct
 {
   u8 *base;
@@ -81,7 +79,6 @@ typedef struct
 
 typedef struct
 {
-  u32atom nmemb;
   bool mask[CACHE_ENTRY_MAP_SIZE];
   atomic_flag guards[CACHE_ENTRY_MAP_SIZE];
   u32 hashes[CACHE_ENTRY_MAP_SIZE];
@@ -155,7 +152,7 @@ typedef enum
 
 typedef enum
 {
-  LIST_MODE_ALL_IDS    = 0x00,
+  LIST_MODE_ALL_KEYS   = 0x00,
   LIST_MODE_ALL_TAGS   = 0x01,
   LIST_MODE_MATCH_ALL  = 0x02,
   LIST_MODE_MATCH_NONE = 0x03,

@@ -465,13 +465,72 @@ handle_clr_request (Client *client, Request *request)
   return STATUS_OK;
 }
 
+struct _ListAllKeysCallbackData
+{
+  Payload   *payload;
+  StatusCode status;
+};
+
+static bool
+list_all_keys_callback (CacheEntry *entry, struct _ListAllKeysCallbackData *data)
+{
+  CacheKey *key     = &entry->key;
+  Payload  *payload = data->payload;
+
+  if (data->status != STATUS_OK)
+    return false;
+
+  if ((payload->nmemb + 1 + key->nmemb) > payload->cap)
+    {
+      data->status = STATUS_OUT_OF_MEMORY;
+      return false;
+    }
+
+  payload->base[payload->nmemb++] = key->nmemb;
+  memcpy (&payload->base[payload->nmemb], key->base, key->nmemb);
+  payload->nmemb += key->nmemb;
+
+  return false;
+}
+
 static StatusCode
 handle_lst_request (Client *client, Request *request, Payload **response_payload)
 {
-  // @Incomplete
+  StatusCode status;
+  ClearMode  mode  = (ClearMode) request->c.mode;
+  u8         ntags = request->c.ntags;
+  CacheTag   tags[ntags];
+
+  status = read_tags_using_payload_buffer (client, tags, ntags);
+  if (status != STATUS_OK)
+    return status;
+
   ++client->counters.lst;
-  (void) request;
-  (void) response_payload;
+
+  switch (mode)
+    {
+    case LIST_MODE_ALL_KEYS:
+      {
+        struct _ListAllKeysCallbackData data;
+        data.status = STATUS_OK;
+        data.payload = &client->worker->payload_buffer;
+        data.payload->nmemb = 0;
+        walk_all_entries (list_all_keys_callback, &data);
+        *response_payload = data.payload;
+        return data.status;
+      }
+    case LIST_MODE_ALL_TAGS:
+      return STATUS_BUG; // @Incomplete
+    case LIST_MODE_MATCH_ALL:
+      return STATUS_BUG; // @Incomplete
+    case LIST_MODE_MATCH_NONE:
+      return STATUS_BUG; // @Incomplete
+    case LIST_MODE_MATCH_ANY:
+      return STATUS_BUG; // @Incomplete
+    default:
+      return STATUS_PROTOCOL_ERROR;
+    }
+
   return STATUS_BUG;
 }
 

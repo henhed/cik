@@ -37,8 +37,6 @@ init_cache_entry_map (CacheEntryHashMap *map)
   assert (map);
 #endif
 
-  atomic_init (&map->nmemb, 0);
-
   for (u32 i = 0; i < CACHE_ENTRY_MAP_SIZE; ++i)
     {
       map->mask[i] = false;
@@ -147,7 +145,6 @@ lock_and_unset_cache_entry (CacheEntryHashMap *map, CacheKey key)
                   map->mask[pos] = false;
                   map->hashes[pos] = 0;
                   map->entries[pos] = NULL;
-                  atomic_fetch_sub (&map->nmemb, 1);
                   UNLOCK_SLOT (map, pos);
                   return entry; // Caller now owns entry lock
                 }
@@ -175,19 +172,8 @@ set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
   assert (map);
   assert (entry->key.base);
   assert (entry->value.base);
+  assert (old_entry != NULL);
 #endif
-
-  if (atomic_load (&map->nmemb) >= CACHE_ENTRY_MAP_SIZE)
-    {
-      if (old_entry == NULL)
-        {
-          // We refuse to overwrite existing entries if caller won't take care of it
-#if DEBUG
-          fprintf (stderr, "[%s] We're full!\n", __FUNCTION__);
-#endif
-          return false;
-        }
-    }
 
   hash = get_key_hash (entry->key);
   slot = hash % CACHE_ENTRY_MAP_SIZE;
@@ -228,39 +214,23 @@ set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
                 }
               if (CMP_ENTRY_KEYS (occupant, entry))
                 {
-                  if (old_entry != NULL)
-                    {
 #if DEBUG
-                      assert (*old_entry != entry);
+                  assert (*old_entry != entry);
 #endif
-                      // If caller wants the old entry they are responsible for
-                      // unlocking it
-                      *old_entry = occupant;
-                      found = true;
-                      break; // slot is still locked
-                    }
-                  else
-                    {
-                      // If caller doesn't want the old entry we reject the new one.
-                      // We don't want duplicate keys. There is a @Bug here though;
-                      // since the same key can get different pos'es depending on
-                      // what else is currently in the map we /can/ get duplicate
-                      // keys. But in that case the most recently added entry will
-                      // be closest to the initially calculated pos and hence
-                      // matched before the older duplicate. This inconsistency has
-                      // to be handled in a higher layer for now.
-                      // Ensuring consistency here would impact @Speed
-                      UNLOCK_ENTRY (occupant);
-                      UNLOCK_SLOT (map, pos);
-#if DEBUG
-                      assert (false); // This case is untested
-#endif
-                      break;
-                    }
+                  *old_entry = occupant; // Caller now own entry lock
+                  found = true;
+                  break; // slot is still locked
                 }
               UNLOCK_ENTRY (occupant);
             }
           UNLOCK_SLOT (map, pos);
+          // @Bug: We can get duplicate keys.  Since the same key can get
+          // different pos'es depending on what else is currently in the map we
+          // /can/ get duplicate keys.  But in that case the most recently added
+          // entry will be closest to the initially calculated pos and hence
+          // matched before the older duplicate.  This inconsistency has to be
+          // handled in a higher layer for now.  Ensuring consistency here would
+          // impact @Speed.
           ++pos;
           if (pos >= CACHE_ENTRY_MAP_SIZE)
             pos = 0;
@@ -268,7 +238,6 @@ set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
       else
         {
           found = true;
-          atomic_fetch_add (&map->nmemb, 1);
           break; // slot is still locked
         }
     }
@@ -326,7 +295,6 @@ walk_entries (CacheEntryHashMap *map, CacheEntryWalkCb callback,
               map->mask[pos] = false;
               map->hashes[pos] = 0;
               map->entries[pos] = NULL;
-              atomic_fetch_sub (&map->nmemb, 1);
             }
           else
             {
