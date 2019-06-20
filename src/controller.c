@@ -20,6 +20,24 @@
 # define ntohll(x) (((u64) ntohl ((x) & 0xFFFFFFFF) << 32) | ntohl ((x) >> 32))
 #endif
 
+static inline CacheEntryHashMap *
+get_map_for_key (CacheKey key)
+{
+  // @Revisit: Right now we look for entropy at the end of the key data. If we
+  // always invert keys & tags we should look at the beginning here instead.
+  // See @Speed note in `handle_set_request'.
+  u32 map_index = 0;
+  if (key.nmemb >= sizeof (u64))
+    map_index = (*(u64 *) &key.base[key.nmemb - sizeof (u64)]) % NUM_CACHE_ENTRY_MAPS;
+  else if (key.nmemb >= sizeof (u32))
+    map_index = (*(u32 *) &key.base[key.nmemb - sizeof (u32)]) % NUM_CACHE_ENTRY_MAPS;
+  else if (key.nmemb >= sizeof (u16))
+    map_index = (*(u16 *) &key.base[key.nmemb - sizeof (u16)]) % NUM_CACHE_ENTRY_MAPS;
+  else if (key.nmemb >= sizeof (u8))
+    map_index = key.base[key.nmemb - 1] % NUM_CACHE_ENTRY_MAPS;
+  return entry_maps[map_index];
+}
+
 static StatusCode
 read_tags_using_payload_buffer (Client *client, CacheTag *tags, u8 ntags)
 {
@@ -72,7 +90,7 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
   key.base = tmp_key_data;
   key.nmemb = klen;
 
-  entry = lock_and_get_cache_entry (entry_map, key);
+  entry = lock_and_get_cache_entry (get_map_for_key (key), key);
   if (!entry)
     {
 #if DEBUG
@@ -219,7 +237,7 @@ handle_set_request (Client *client, Request *request)
   if (ttl != (u32) -1)
     entry->expires = entry->mtime + ttl;
 
-  if (!set_locked_cache_entry (entry_map, entry, &old_entry))
+  if (!set_locked_cache_entry (get_map_for_key (entry->key), entry, &old_entry))
     {
 #if DEBUG
       assert (old_entry == NULL);
@@ -266,7 +284,7 @@ delete_entry_by_key (CacheKey key)
 #endif
 
   // Unmap entry
-  entry = lock_and_unset_cache_entry (entry_map, key);
+  entry = lock_and_unset_cache_entry (get_map_for_key (key), key);
   if (!entry)
     return STATUS_NOT_FOUND;
 
@@ -279,7 +297,7 @@ delete_entry_by_key (CacheKey key)
       // about @Bug in `set_locked_cache_entry'.
       UNLOCK_ENTRY (entry);
       release_memory (entry);
-      entry = lock_and_unset_cache_entry (entry_map, key);
+      entry = lock_and_unset_cache_entry (get_map_for_key (key), key);
     }
   while (entry != NULL);
 
@@ -367,6 +385,13 @@ clear_non_matching_callback (CacheEntry *entry, CacheTagArray *tags)
   return clear_all_callback (entry, NULL);
 }
 
+static void
+walk_all_entries (void *cb, void *data)
+{
+  for (u32 i = 0; i < NUM_CACHE_ENTRY_MAPS; ++i)
+    walk_entries (entry_maps[i], (CacheEntryWalkCb) cb, data);
+}
+
 static StatusCode
 handle_clr_request (Client *client, Request *request)
 {
@@ -389,7 +414,7 @@ handle_clr_request (Client *client, Request *request)
 #if DEBUG
         printf (YELLOW ("CLR") "[%X]: (MATCH ALL)\n", client->worker->id);
 #endif
-      walk_entries (entry_map, clear_all_callback, NULL);
+      walk_all_entries (clear_all_callback, NULL);
       return STATUS_OK;
     case CLEAR_MODE_OLD:
       {
@@ -397,7 +422,7 @@ handle_clr_request (Client *client, Request *request)
 #if DEBUG
         printf (YELLOW ("CLR") "[%X]: (MATCH OLD)\n", client->worker->id);
 #endif
-        walk_entries (entry_map, (CacheEntryWalkCb) clear_old_callback, &now);
+        walk_all_entries (clear_old_callback, &now);
         return STATUS_OK;
       }
     case CLEAR_MODE_MATCH_NONE:
@@ -409,9 +434,7 @@ handle_clr_request (Client *client, Request *request)
           printf (" '%.*s'", tags[t].nmemb, tags[t].base);
         printf ("\n");
 #endif
-        walk_entries (entry_map,
-                      (CacheEntryWalkCb) clear_non_matching_callback,
-                      &tag_array);
+        walk_all_entries (clear_non_matching_callback, &tag_array);
         return STATUS_OK;
       }
     case CLEAR_MODE_MATCH_ALL: // Intentional fallthrough
@@ -481,7 +504,7 @@ handle_nfo_request (Client *client, Request *request, Payload **response_payload
       key.base = tmp_key_data;
       key.nmemb = klen;
 
-      entry = lock_and_get_cache_entry (entry_map, key);
+      entry = lock_and_get_cache_entry (get_map_for_key (key), key);
       if (!entry)
         return STATUS_NOT_FOUND;
 

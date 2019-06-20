@@ -39,7 +39,7 @@ init_cache_entry_map (CacheEntryHashMap *map)
 
   atomic_init (&map->nmemb, 0);
 
-  for (u32 i = 0; i < MAX_NUM_CACHE_ENTRIES; ++i)
+  for (u32 i = 0; i < CACHE_ENTRY_MAP_SIZE; ++i)
     {
       map->mask[i] = false;
       map->guards[i] = (atomic_flag) ATOMIC_FLAG_INIT;
@@ -68,7 +68,7 @@ lock_and_get_cache_entry (CacheEntryHashMap *map, CacheKey key)
 #endif
 
   hash = get_key_hash (key);
-  slot = hash % MAX_NUM_CACHE_ENTRIES;
+  slot = hash % CACHE_ENTRY_MAP_SIZE;
   pos  = slot;
 
   do
@@ -100,7 +100,7 @@ lock_and_get_cache_entry (CacheEntryHashMap *map, CacheKey key)
         }
       UNLOCK_SLOT (map, pos);
       ++pos;
-      if (pos >= MAX_NUM_CACHE_ENTRIES)
+      if (pos >= CACHE_ENTRY_MAP_SIZE)
         pos = 0;
     }
   while (pos != slot);
@@ -119,7 +119,7 @@ lock_and_unset_cache_entry (CacheEntryHashMap *map, CacheKey key)
 #endif
 
   hash = get_key_hash (key);
-  slot = hash % MAX_NUM_CACHE_ENTRIES;
+  slot = hash % CACHE_ENTRY_MAP_SIZE;
   pos  = slot;
 
   do
@@ -156,7 +156,7 @@ lock_and_unset_cache_entry (CacheEntryHashMap *map, CacheKey key)
         }
       UNLOCK_SLOT (map, pos);
       ++pos;
-      if (pos >= MAX_NUM_CACHE_ENTRIES)
+      if (pos >= CACHE_ENTRY_MAP_SIZE)
         pos = 0;
     }
   while (pos != slot);
@@ -177,7 +177,7 @@ set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
   assert (entry->value.base);
 #endif
 
-  if (atomic_load (&map->nmemb) >= MAX_NUM_CACHE_ENTRIES)
+  if (atomic_load (&map->nmemb) >= CACHE_ENTRY_MAP_SIZE)
     {
       if (old_entry == NULL)
         {
@@ -190,7 +190,7 @@ set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
     }
 
   hash = get_key_hash (entry->key);
-  slot = hash % MAX_NUM_CACHE_ENTRIES;
+  slot = hash % CACHE_ENTRY_MAP_SIZE;
   pos  = slot;
 
   do
@@ -262,7 +262,7 @@ set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
             }
           UNLOCK_SLOT (map, pos);
           ++pos;
-          if (pos >= MAX_NUM_CACHE_ENTRIES)
+          if (pos >= CACHE_ENTRY_MAP_SIZE)
             pos = 0;
         }
       else
@@ -298,7 +298,7 @@ walk_entries (CacheEntryHashMap *map, CacheEntryWalkCb callback,
   assert (map);
 #endif
 
-  for (u32 pos = 0; pos < MAX_NUM_CACHE_ENTRIES; ++pos)
+  for (u32 pos = 0; pos < CACHE_ENTRY_MAP_SIZE; ++pos)
     {
       LOCK_SLOT (map, pos);
       if (map->mask[pos])

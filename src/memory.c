@@ -12,6 +12,12 @@
 #include "entry.h"
 #include "print.h"
 
+#define PADDING(s)                                         \
+  ((alignof (max_align_t) - ((s) % alignof (max_align_t))) \
+   % alignof (max_align_t))
+
+#define TPADDING(T) PADDING (sizeof (T))
+
 typedef struct
 {
   u32 size;
@@ -21,7 +27,7 @@ typedef struct
   atomic_flag *occupancy_mask;
 } Bucket;
 
-CacheEntryHashMap *entry_map = NULL;
+CacheEntryHashMap **entry_maps = NULL;
 
 static Bucket buckets[MAX_NUM_BUCKETS] = { 0 };
 static size_t num_buckets = 0;
@@ -30,6 +36,8 @@ static void  *main_memory = NULL;
 static void  *memory_cursor = NULL;
 static size_t total_memory_size = 0;
 static size_t total_bucket_size = 0;
+static size_t total_hash_map_array_size = 0;
+static size_t total_hash_maps_size = 0;
 
 int
 init_memory ()
@@ -56,8 +64,14 @@ init_memory ()
     }
   printf ("Total bucket memory is %lu\n", total_bucket_size);
 
+  total_hash_map_array_size  = NUM_CACHE_ENTRY_MAPS * sizeof (CacheEntryHashMap *);
+  total_hash_map_array_size += PADDING (total_hash_map_array_size);
+  total_hash_maps_size       = NUM_CACHE_ENTRY_MAPS * (sizeof (CacheEntryHashMap)
+                                                       + TPADDING (CacheEntryHashMap));
+
   total_memory_size = (total_bucket_size
-                       + sizeof (CacheEntryHashMap));
+                       + total_hash_map_array_size
+                       + total_hash_maps_size);
 
   // Try to allocate memory
   printf ("Reserving %lu bytes\n", total_memory_size);
@@ -98,9 +112,15 @@ init_memory ()
       assert (((intptr_t) memory_cursor % alignof (max_align_t)) == 0);
     }
 
-  entry_map = memory_cursor;
-  memory_cursor += sizeof (CacheEntryHashMap);
-  assert (((intptr_t) memory_cursor % alignof (max_align_t)) == 0);
+  entry_maps = memory_cursor;
+  memory_cursor += total_hash_map_array_size + PADDING (total_hash_map_array_size);
+
+  for (u32 i = 0; i < NUM_CACHE_ENTRY_MAPS; ++i)
+    {
+      entry_maps[i] = memory_cursor;
+      memory_cursor += sizeof (CacheEntryHashMap) + TPADDING (CacheEntryHashMap);
+      assert (((intptr_t) memory_cursor % alignof (max_align_t)) == 0);
+    }
 
   // Make sure all allocations are accounted for
   assert ((size_t) (memory_cursor - main_memory) == total_memory_size);
@@ -108,14 +128,10 @@ init_memory ()
   return 0;
 }
 
-#define PADDING(T) \
-  ((alignof (max_align_t) - (sizeof (T) % alignof (max_align_t))) \
-   % alignof (max_align_t))
-
 void *
 reserve_memory (u32 size)
 {
-  u32 head_size = sizeof (atomic_flag *) + PADDING (atomic_flag *);
+  u32 head_size = sizeof (atomic_flag *) + TPADDING (atomic_flag *);
   u32 total_size = head_size + size;
 
   if ((UINT32_MAX - head_size) < size)
@@ -164,7 +180,7 @@ reserve_memory (u32 size)
 void
 release_memory (void *memory)
 {
-  u32 head_size = sizeof (atomic_flag *) + PADDING (atomic_flag *);
+  u32 head_size = sizeof (atomic_flag *) + TPADDING (atomic_flag *);
 #if DEBUG
   assert (memory != NULL);
 #endif
@@ -197,7 +213,7 @@ reserve_biggest_possible_payload (Payload *payload)
 {
   // @Revisit: Maybe this head_size should be baked into the bucket somehow?
   // It seem error prone to calculate it everywhere.
-  u32 head_size = sizeof (atomic_flag *) + PADDING (atomic_flag *);
+  u32 head_size = sizeof (atomic_flag *) + TPADDING (atomic_flag *);
 #if DEBUG
   assert (payload != NULL);
 #endif

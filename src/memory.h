@@ -3,7 +3,7 @@
 
 #include "types.h"
 
-CacheEntryHashMap *entry_map;
+CacheEntryHashMap **entry_maps;
 
 int         init_memory                         (void);
 void       *reserve_memory                      (u32);
