@@ -46,17 +46,17 @@ typedef struct
 } Payload;
 
 // Linked list
-typedef struct _KeyNode
+typedef struct _KeyElem
 {
   CacheKey key;
-  struct _KeyNode *next;
-} KeyNode;
+  struct _KeyElem *next;
+} KeyElem;
 
 // Binary tree
 typedef struct _TagNode
 {
   CacheTag tag;
-  KeyNode *keys;
+  KeyElem *keys;
   struct _TagNode * _Atomic left;
   struct _TagNode * _Atomic right;
 } TagNode;
@@ -84,6 +84,9 @@ typedef struct
   u32 hashes[CACHE_ENTRY_MAP_SIZE];
   CacheEntry *entries[CACHE_ENTRY_MAP_SIZE];
 } CacheEntryHashMap;
+
+typedef bool (*CacheEntryWalkCb) (CacheEntry *, void *);
+typedef bool (*CacheTagWalkCb)   (CacheTag,     void *);
 
 typedef struct sockaddr    sockaddr_t;
 typedef struct sockaddr_in sockaddr_in_t;

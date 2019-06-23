@@ -265,6 +265,7 @@ walk_entries (CacheEntryHashMap *map, CacheEntryWalkCb callback,
 {
 #if DEBUG
   assert (map);
+  assert (callback);
 #endif
 
   for (u32 pos = 0; pos < CACHE_ENTRY_MAP_SIZE; ++pos)

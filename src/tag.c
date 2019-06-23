@@ -28,19 +28,19 @@ keys_are_equal (CacheKey a, CacheKey b)
   return (0 == memcmp (a.base, b.base, a.nmemb)) ? true : false;
 }
 
-static KeyNode *
-create_key_node (CacheKey key)
+static KeyElem *
+create_key_elem (CacheKey key)
 {
-  KeyNode *node;
-  node = reserve_memory (sizeof (KeyNode) + (sizeof (u8) * key.nmemb));
-  if (node)
+  KeyElem *elem;
+  elem = reserve_memory (sizeof (KeyElem) + (sizeof (u8) * key.nmemb));
+  if (elem)
     {
-      *node = (KeyNode) { 0 };
-      node->key.base = (u8 *) (node + 1);
-      node->key.nmemb = key.nmemb;
-      memcpy (node->key.base, key.base, key.nmemb);
+      *elem = (KeyElem) { 0 };
+      elem->key.base = (u8 *) (elem + 1);
+      elem->key.nmemb = key.nmemb;
+      memcpy (elem->key.base, key.base, key.nmemb);
     }
-  return node;
+  return elem;
 }
 
 static TagNode *
@@ -59,28 +59,28 @@ create_tag_node (CacheTag tag)
 }
 
 static bool
-insert_if_unique (KeyNode **list, CacheKey key)
+insert_if_unique (KeyElem **list, CacheKey key)
 {
-  KeyNode *node;
+  KeyElem *elem;
 #if DEBUG
   assert (list != NULL);
 #endif
 
-  for (node = *list; node != NULL; node = node->next)
+  for (elem = *list; elem != NULL; elem = elem->next)
     {
-      if (keys_are_equal (node->key, key))
+      if (keys_are_equal (elem->key, key))
         return false;
     }
 
-  node = create_key_node (key);
+  elem = create_key_elem (key);
 #if DEBUG
-  assert (node != NULL);
+  assert (elem != NULL);
 #endif
 
-  if (node != NULL)
+  if (elem != NULL)
     {
-      node->next = *list;
-      *list = node;
+      elem->next = *list;
+      *list = elem;
       return true;
     }
 
@@ -191,22 +191,22 @@ get_tag_if_exists (CacheTag tag)
   return NULL;
 }
 
-static KeyNode *
+static KeyElem *
 get_keys_by_tag (CacheTag tag)
 {
   TagNode *node = get_tag_if_exists (tag);
   return (node != NULL) ? node->keys : NULL;
 }
 
-static KeyNode *
-copy_key_list (KeyNode *list)
+static KeyElem *
+copy_key_list (KeyElem *list)
 {
-  KeyNode *new_list = NULL;
-  for (KeyNode **node = &list, **copy = &new_list;
-       *node;
-       node = &(*node)->next, copy = &(*copy)->next)
+  KeyElem *new_list = NULL;
+  for (KeyElem **elem = &list, **copy = &new_list;
+       *elem;
+       elem = &(*elem)->next, copy = &(*copy)->next)
     {
-      *copy = create_key_node ((*node)->key);
+      *copy = create_key_elem ((*elem)->key);
     }
   return new_list;
 }
@@ -228,16 +228,16 @@ remove_key_from_tag (CacheTag tag, CacheKey key)
 {
   // @Incomplete: MT-safety!
 
-  TagNode *tnode = get_tag_if_exists (tag);
-  if (tnode == NULL)
+  TagNode *node = get_tag_if_exists (tag);
+  if (node == NULL)
     return;
 
-  for (KeyNode **knode = &tnode->keys; *knode; knode = &(*knode)->next)
+  for (KeyElem **elem = &node->keys; *elem; elem = &(*elem)->next)
     {
-      if (keys_are_equal ((*knode)->key, key))
+      if (keys_are_equal ((*elem)->key, key))
         {
-          KeyNode *found = *knode;
-          *knode = found->next;
+          KeyElem *found = *elem;
+          *elem = found->next;
           release_memory (found);
           break; // We assume there are no dupes (`insert_if_unique').
         }
@@ -245,17 +245,59 @@ remove_key_from_tag (CacheTag tag, CacheKey key)
 }
 
 void
-release_key_list (KeyNode *node)
+walk_all_tags (CacheTagWalkCb callback, void *user_data)
 {
-  while (node)
+  u32 stack_cap = 1024; // @Incomplete: This will not be enough
+  u32 stack_nmemb = 0;
+  TagNode *stack[stack_cap];
+  TagNode *current = &root;
+
+#if DEBUG
+  assert (callback);
+#endif
+
+  while ((current != NULL) || (stack_nmemb > 0))
     {
-      KeyNode *next = node->next;
-      release_memory (node);
-      node = next;
+      while (current != NULL)
+        {
+#if DEBUG
+          assert (stack_nmemb < stack_cap);
+#endif
+          stack[stack_nmemb++] = current;
+          current = TAG_NODE_LEFT (current);
+        }
+
+#if DEBUG
+      assert (stack_nmemb > 0);
+#endif
+      current = stack[--stack_nmemb];
+
+      if (current->keys != NULL) // @Incomplete: MT-safety
+        {
+          bool result = callback (current->tag, user_data);
+          (void) result;
+          // Return value ignored for now. `false' could mean `remove' like it
+          // does for entry walk but that would add a whole lot of complexity
+          // with regards to MT-safety. At the moment we never remove any tags
+          // or balance the tree.
+        }
+
+      current = TAG_NODE_RIGHT (current);
     }
 }
 
-KeyNode *
+void
+release_key_list (KeyElem *elem)
+{
+  while (elem)
+    {
+      KeyElem *next = elem->next;
+      release_memory (elem);
+      elem = next;
+    }
+}
+
+KeyElem *
 get_keys_matching_any_tag (CacheTag *tags, u8 ntags)
 {
   // @Incomplete: MT-safety!
@@ -264,7 +306,7 @@ get_keys_matching_any_tag (CacheTag *tags, u8 ntags)
   assert (tags != NULL);
 #endif
 
-  KeyNode *found_keys = NULL;
+  KeyElem *found_keys = NULL;
 
   if (ntags == 0)
     return NULL;
@@ -274,9 +316,9 @@ get_keys_matching_any_tag (CacheTag *tags, u8 ntags)
 
   for (u8 t = 1; t < ntags; ++t)
     {
-      KeyNode *keys = get_keys_by_tag (tags[t]); // .. and lock here too
+      KeyElem *keys = get_keys_by_tag (tags[t]); // .. and lock here too
 
-      for (KeyNode **tag_key = &keys;
+      for (KeyElem **tag_key = &keys;
            *tag_key;
            tag_key = &(*tag_key)->next)
         {
@@ -287,7 +329,7 @@ get_keys_matching_any_tag (CacheTag *tags, u8 ntags)
   return found_keys;
 }
 
-KeyNode *
+KeyElem *
 get_keys_matching_all_tags (CacheTag *tags, u8 ntags)
 {
   // @Incomplete: MT-safety!
@@ -296,7 +338,7 @@ get_keys_matching_all_tags (CacheTag *tags, u8 ntags)
   assert (tags != NULL);
 #endif
 
-  KeyNode *found_keys = NULL;
+  KeyElem *found_keys = NULL;
 
   if (ntags == 0)
     return NULL;
@@ -306,16 +348,16 @@ get_keys_matching_all_tags (CacheTag *tags, u8 ntags)
 
   for (u8 t = 1; t < ntags; ++t)
     {
-      KeyNode *keys = get_keys_by_tag (tags[t]); // .. and lock here too
+      KeyElem *keys = get_keys_by_tag (tags[t]); // .. and lock here too
 
-      for (KeyNode **found_key = &found_keys;
+      for (KeyElem **found_key = &found_keys;
            *found_key;
            found_key = &(*found_key)->next)
         {
           bool match;
         skip_advancement:
           match = false;
-          for (KeyNode **tag_key = &keys;
+          for (KeyElem **tag_key = &keys;
                *tag_key;
                tag_key = &(*tag_key)->next)
             {
@@ -327,7 +369,7 @@ get_keys_matching_all_tags (CacheTag *tags, u8 ntags)
             }
           if (!match)
             {
-              KeyNode *not_found = *found_key;
+              KeyElem *not_found = *found_key;
               *found_key = not_found->next;
               release_memory (not_found);
               if (*found_key)
@@ -351,7 +393,7 @@ debug_print_tag (int fd, TagNode *node, u32 depth)
            "* ",
            node->tag.nmemb,
            node->tag.base);
-  for (KeyNode **list = &node->keys; *list != NULL; list = &(*list)->next)
+  for (KeyElem **list = &node->keys; *list != NULL; list = &(*list)->next)
     {
       if (++nentries < 2)
         dprintf (fd, " => '%.*s'",
@@ -390,11 +432,11 @@ cmp_debug_tag (const void *_a, const void *_b)
 void
 debug_print_tags (int fd)
 {
-  u32 debug_tag_cap   = 1024;
+  u32 debug_tag_cap   = 1024; // @Incomplete: This will not be enough
   u32 debug_tag_nmemb = 0;
   DebugTag debug_tags[debug_tag_cap];
 
-  u32 stack_cap = 1024;
+  u32 stack_cap = 1024; // @Incomplete: This will not be enough
   u32 stack_nmemb = 0;
   TagNode *stack[stack_cap];
   TagNode *current = &root;
@@ -426,7 +468,7 @@ debug_print_tags (int fd)
         dt->tree_depth = stack_nmemb;
         dt->num_keys   = 0;
 
-        for (KeyNode **node = &current->keys; *node; node = &(*node)->next)
+        for (KeyElem **elem = &current->keys; *elem; elem = &(*elem)->next)
           ++dt->num_keys;
       }
 

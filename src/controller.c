@@ -440,7 +440,7 @@ handle_clr_request (Client *client, Request *request)
     case CLEAR_MODE_MATCH_ALL: // Intentional fallthrough
     case CLEAR_MODE_MATCH_ANY:
       {
-        KeyNode *keys = NULL;
+        KeyElem *keys = NULL;
 #if DEBUG
         printf (YELLOW ("CLR") "[%X]: (MATCH %s)", client->worker->id,
                 (mode == CLEAR_MODE_MATCH_ALL) ? "ALL" : "ANY");
@@ -452,7 +452,7 @@ handle_clr_request (Client *client, Request *request)
           ? get_keys_matching_all_tags (tags, ntags)
           : get_keys_matching_any_tag  (tags, ntags);
 
-        for (KeyNode **key = &keys; *key; key = &(*key)->next)
+        for (KeyElem **key = &keys; *key; key = &(*key)->next)
           delete_entry_by_key ((*key)->key);
         release_key_list (keys);
 
@@ -493,12 +493,39 @@ list_all_keys_callback (CacheEntry *entry, struct _ListAllKeysCallbackData *data
   return false;
 }
 
+struct _ListAllTagsCallbackData
+{
+  Payload   *payload;
+  StatusCode status;
+};
+
+static bool
+list_all_tags_callback (CacheTag tag, struct _ListAllTagsCallbackData *data)
+{
+  Payload  *payload = data->payload;
+
+  if (data->status != STATUS_OK)
+    return false;
+
+  if ((payload->nmemb + 1 + tag.nmemb) > payload->cap)
+    {
+      data->status = STATUS_OUT_OF_MEMORY;
+      return false;
+    }
+
+  payload->base[payload->nmemb++] = tag.nmemb;
+  memcpy (&payload->base[payload->nmemb], tag.base, tag.nmemb);
+  payload->nmemb += tag.nmemb;
+
+  return false;
+}
+
 static StatusCode
 handle_lst_request (Client *client, Request *request, Payload **response_payload)
 {
-  StatusCode status;
-  ClearMode  mode  = (ClearMode) request->c.mode;
-  u8         ntags = request->c.ntags;
+  StatusCode status = STATUS_OK;
+  ClearMode  mode   = (ClearMode) request->c.mode;
+  u8         ntags  = request->c.ntags;
   CacheTag   tags[ntags];
 
   status = read_tags_using_payload_buffer (client, tags, ntags);
@@ -520,7 +547,15 @@ handle_lst_request (Client *client, Request *request, Payload **response_payload
         return data.status;
       }
     case LIST_MODE_ALL_TAGS:
-      return STATUS_BUG; // @Incomplete
+      {
+        struct _ListAllKeysCallbackData data;
+        data.status = STATUS_OK;
+        data.payload = &client->worker->payload_buffer;
+        data.payload->nmemb = 0;
+        walk_all_tags ((CacheTagWalkCb) list_all_tags_callback, &data);
+        *response_payload = data.payload;
+        return data.status;
+      }
     case LIST_MODE_MATCH_ALL:
       return STATUS_BUG; // @Incomplete
     case LIST_MODE_MATCH_NONE:
