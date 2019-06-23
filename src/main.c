@@ -158,7 +158,7 @@ test_walk_entries (CacheEntry *entry, void *user_data)
   assert (entry);
   fprintf (stderr, "%s: got called: %.*s\n", __FUNCTION__,
            entry->key.nmemb, entry->key.base);
-  return false;
+  return true;
 }
 
 static void

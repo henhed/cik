@@ -467,8 +467,8 @@ handle_clr_request (Client *client, Request *request)
 
 struct _ListAllKeysCallbackData
 {
-  Payload   *payload;
   StatusCode status;
+  Payload   *payload;
 };
 
 static bool
@@ -493,10 +493,40 @@ list_all_keys_callback (CacheEntry *entry, struct _ListAllKeysCallbackData *data
   return false;
 }
 
+struct _ListNonMatchingKeysCallbackData
+{
+  struct _ListAllKeysCallbackData base;
+  CacheTagArray tags;
+};
+
+static bool
+list_non_matching_callback (CacheEntry *entry,
+                            struct _ListNonMatchingKeysCallbackData *data)
+{
+  if (data->base.status != STATUS_OK)
+    return false;
+
+  for (u8 i = 0; i < data->tags.nmemb; ++i)
+    {
+      CacheTag *want = &data->tags.base[i];
+      for (u8 j = 0; j < entry->tags.nmemb; ++j)
+        {
+          CacheTag *have = &entry->tags.base[j];
+          if ((want->nmemb == have->nmemb)
+              && (memcmp (want->base, have->base, have->nmemb) == 0))
+            {
+              return false;
+            }
+        }
+    }
+
+  return list_all_keys_callback (entry, &data->base);
+}
+
 struct _ListAllTagsCallbackData
 {
-  Payload   *payload;
   StatusCode status;
+  Payload   *payload;
 };
 
 static bool
@@ -526,6 +556,7 @@ handle_lst_request (Client *client, Request *request, Payload **response_payload
   StatusCode status = STATUS_OK;
   ClearMode  mode   = (ClearMode) request->c.mode;
   u8         ntags  = request->c.ntags;
+  Payload   *buffer = &client->worker->payload_buffer;
   CacheTag   tags[ntags];
 
   status = read_tags_using_payload_buffer (client, tags, ntags);
@@ -538,9 +569,10 @@ handle_lst_request (Client *client, Request *request, Payload **response_payload
     {
     case LIST_MODE_ALL_KEYS:
       {
-        struct _ListAllKeysCallbackData data;
-        data.status = STATUS_OK;
-        data.payload = &client->worker->payload_buffer;
+        struct _ListAllKeysCallbackData data = {
+          .status = STATUS_OK,
+          .payload = buffer
+        };
         data.payload->nmemb = 0;
         walk_all_entries (list_all_keys_callback, &data);
         *response_payload = data.payload;
@@ -548,17 +580,39 @@ handle_lst_request (Client *client, Request *request, Payload **response_payload
       }
     case LIST_MODE_ALL_TAGS:
       {
-        struct _ListAllKeysCallbackData data;
-        data.status = STATUS_OK;
-        data.payload = &client->worker->payload_buffer;
+        struct _ListAllKeysCallbackData data = {
+          .status = STATUS_OK,
+          .payload = buffer
+        };
         data.payload->nmemb = 0;
         walk_all_tags ((CacheTagWalkCb) list_all_tags_callback, &data);
         *response_payload = data.payload;
         return data.status;
       }
-    case LIST_MODE_MATCH_ALL:
-      return STATUS_BUG; // @Incomplete
     case LIST_MODE_MATCH_NONE:
+      {
+        // Make virtual payload since we've already used part of it for tags and
+        // we need to pass them to our walk callback without them being overwritten.
+        static thread_local Payload alt_payload;
+        alt_payload = (Payload) {
+          .base  = (buffer->base + buffer->nmemb),
+          .nmemb = 0,
+          .cap   = (buffer->cap - buffer->nmemb)
+        };
+        struct _ListNonMatchingKeysCallbackData data = {
+          .base = {
+            .status  = STATUS_OK,
+            .payload = &alt_payload
+          },
+          .tags.base  = tags,
+          .tags.nmemb = ntags
+        };
+        data.base.payload->nmemb = 0;
+        walk_all_entries (list_non_matching_callback, &data);
+        *response_payload = data.base.payload;
+        return data.base.status;
+      }
+    case LIST_MODE_MATCH_ALL:
       return STATUS_BUG; // @Incomplete
     case LIST_MODE_MATCH_ANY:
       return STATUS_BUG; // @Incomplete
