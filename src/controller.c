@@ -64,6 +64,9 @@ read_tags_using_payload_buffer (Client *client, CacheTag *tags, u8 ntags)
       buffer_cap -= tag->nmemb;
     }
 
+  client->worker->payload_buffer.nmemb = (client->worker->payload_buffer.cap
+                                          - buffer_cap);
+
   return STATUS_OK;
 }
 
@@ -554,7 +557,7 @@ static StatusCode
 handle_lst_request (Client *client, Request *request, Payload **response_payload)
 {
   StatusCode status = STATUS_OK;
-  ClearMode  mode   = (ClearMode) request->c.mode;
+  ListMode   mode   = (ListMode) request->c.mode;
   u8         ntags  = request->c.ntags;
   Payload   *buffer = &client->worker->payload_buffer;
   CacheTag   tags[ntags];
@@ -573,7 +576,7 @@ handle_lst_request (Client *client, Request *request, Payload **response_payload
           .status = STATUS_OK,
           .payload = buffer
         };
-        data.payload->nmemb = 0;
+        data.payload->nmemb = 0; // We don't care about input tags
         walk_all_entries (list_all_keys_callback, &data);
         *response_payload = data.payload;
         return data.status;
@@ -584,7 +587,7 @@ handle_lst_request (Client *client, Request *request, Payload **response_payload
           .status = STATUS_OK,
           .payload = buffer
         };
-        data.payload->nmemb = 0;
+        data.payload->nmemb = 0; // We don't care about input tags
         walk_all_tags ((CacheTagWalkCb) list_all_tags_callback, &data);
         *response_payload = data.payload;
         return data.status;
@@ -607,15 +610,39 @@ handle_lst_request (Client *client, Request *request, Payload **response_payload
           .tags.base  = tags,
           .tags.nmemb = ntags
         };
-        data.base.payload->nmemb = 0;
         walk_all_entries (list_non_matching_callback, &data);
         *response_payload = data.base.payload;
         return data.base.status;
       }
-    case LIST_MODE_MATCH_ALL:
-      return STATUS_BUG; // @Incomplete
+    case LIST_MODE_MATCH_ALL: // Intentional fallthrough
     case LIST_MODE_MATCH_ANY:
-      return STATUS_BUG; // @Incomplete
+      {
+        KeyElem *list = (mode == LIST_MODE_MATCH_ALL)
+          ? get_keys_matching_all_tags (tags, ntags)
+          : get_keys_matching_any_tag  (tags, ntags);
+
+        status = STATUS_OK;
+        buffer->nmemb = 0; // We're done with `tags' now
+
+        for (KeyElem **elem = &list; *elem; elem = &(*elem)->next)
+          {
+            CacheKey key = (*elem)->key;
+            if ((buffer->nmemb + 1 + key.nmemb) > buffer->cap)
+              {
+                status = STATUS_OUT_OF_MEMORY;
+                break;
+              }
+
+            buffer->base[buffer->nmemb++] = key.nmemb;
+            memcpy (&buffer->base[buffer->nmemb], key.base, key.nmemb);
+            buffer->nmemb += key.nmemb;
+          }
+
+        release_key_list (list);
+
+        *response_payload = buffer;
+        return status;
+      }
     default:
       return STATUS_PROTOCOL_ERROR;
     }
