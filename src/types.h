@@ -57,8 +57,8 @@ typedef struct _TagNode
 {
   CacheTag tag;
   KeyElem *keys;
-  struct _TagNode * _Atomic left;
-  struct _TagNode * _Atomic right;
+  _Atomic (struct _TagNode *) left;
+  _Atomic (struct _TagNode *) right;
 } TagNode;
 
 typedef struct

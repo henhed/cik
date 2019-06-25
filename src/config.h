@@ -13,6 +13,7 @@
 #define MIN_BUCKET_SIZE        0x100     // 256 Bytes
 #define MAX_BUCKET_SIZE        0x800000  //   8 Megabytes
 #define MAX_BUCKET_ENTRY_COUNT 0x80000   // 512 K
+#define MAX_TOTAL_MEMORY       0x100000000 // 4Gb
 
 #define NUM_CACHE_ENTRY_MAPS 6421
 #define CACHE_ENTRY_MAP_SIZE 797
