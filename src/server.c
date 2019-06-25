@@ -158,7 +158,7 @@ wait_for_new_connection (Server *server)
   client->worker = &workers[worker_id];
 
   event = (epoll_event_t) { 0 };
-  event.events = EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP;
+  event.events = EPOLLIN | EPOLLERR | EPOLLHUP;
   event.data.ptr = client;
   if (0 > epoll_ctl (client->worker->epfd, EPOLL_CTL_ADD, client->fd, &event))
     {
@@ -175,10 +175,7 @@ static int
 run_accept_thread (Server *server)
 {
   while (atomic_load (&server->is_running))
-    {
-      wait_for_new_connection (server);
-      thrd_yield ();
-    }
+    wait_for_new_connection (server);
 
   return thrd_success;
 }
@@ -242,7 +239,7 @@ process_worker_events (Worker *worker)
           continue;
         }
 
-      if ((event->events & (EPOLLIN | EPOLLOUT)) == (EPOLLIN | EPOLLOUT))
+      if (event->events & EPOLLIN)
         {
           Client    *client   = event->data.ptr;
           Request    request  = { 0 };
@@ -324,10 +321,7 @@ run_worker (Worker *worker)
     }
 
   while (atomic_load (&server.is_running))
-    {
-      process_worker_events (worker);
-      thrd_yield ();
-    }
+    process_worker_events (worker);
 
   close (worker->epfd);
   release_memory (worker->payload_buffer.base);
