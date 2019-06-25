@@ -48,7 +48,7 @@ CacheEntryHashMap **entry_maps = NULL;
 static Partition *partitions = NULL;
 
 static void *main_memory = NULL;
-static _Atomic (void *) memory_cursor = NULL;
+static atomic_uintptr_t memory_cursor = 0;
 static size_t total_system_size = 0;
 static size_t total_partition_size = 0;
 static size_t total_hash_map_array_size = 0;
@@ -57,10 +57,10 @@ static size_t total_hash_maps_size = 0;
 static void *
 push_memory (u32 size)
 {
-  void *data = atomic_fetch_add (&memory_cursor, size);
-  if ((data + size) > (main_memory + MAX_TOTAL_MEMORY))
+  uintptr_t ptr = atomic_fetch_add (&memory_cursor, size);
+  if ((ptr + size) > ((uintptr_t) main_memory + MAX_TOTAL_MEMORY))
     return NULL;
-  return data;
+  return (void *) ptr;
 }
 
 int
@@ -98,7 +98,7 @@ init_memory ()
       return errno;
     }
 
-  atomic_init (&memory_cursor, main_memory);
+  atomic_init (&memory_cursor, (uintptr_t) main_memory);
   assert (((intptr_t) memory_cursor % alignof (max_align_t)) == 0);
 
   for (u32 size = MAX_BUCKET_SIZE; size >= MIN_BUCKET_SIZE; size >>= 1)
@@ -121,7 +121,7 @@ init_memory ()
     }
 
   // Make sure all allocations are accounted for
-  assert ((size_t) (memory_cursor - main_memory) == total_system_size);
+  assert ((size_t) (memory_cursor - (uintptr_t) main_memory) == total_system_size);
 
   return 0;
 }
@@ -311,7 +311,7 @@ void
 debug_print_memory (int fd)
 {
   int count = 0;
-  u32 memory_left = atomic_load (&memory_cursor) - main_memory;
+  u32 memory_left = atomic_load (&memory_cursor) - (uintptr_t) main_memory;
 
   static u32 kb = 1024;
   static u32 mb = 1024 * 1024;
