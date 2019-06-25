@@ -130,6 +130,7 @@ get_or_create_node (TagNode *parent, CacheTag tag)
               if (!atomic_compare_exchange_strong (&parent->left, &nulltag, left))
                 {
                   // We lost a race, release node
+                  nulltag = NULL;
                   release_memory (left);
                   left = TAG_NODE_LEFT (parent);
 #if DEBUG
@@ -149,6 +150,7 @@ get_or_create_node (TagNode *parent, CacheTag tag)
               if (!atomic_compare_exchange_strong (&parent->right, &nulltag, right))
                 {
                   // We lost a race, release node
+                  nulltag = NULL;
                   release_memory (right);
                   right = TAG_NODE_RIGHT (parent);
 #if DEBUG
