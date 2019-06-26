@@ -3,6 +3,8 @@
 
 #include <stdio.h>
 
+#include "config.h"
+
 #define BLUE(string)   "\e[0;34m" string "\e[0m"
 #define GREEN(string)  "\e[0;32m" string "\e[0m"
 #define RED(string)    "\e[1;31m" string "\e[0m"
@@ -13,4 +15,15 @@
                  "----------------------------------------"
 #define BLANKSTR "                                        " \
                  "                                        "
+
+#if DEBUG
+# define dbg_print printf
+#else
+# define dbg_print(fmt, ...)
+#endif
+
+#define err_print(fmt, ...)                                     \
+  fprintf (stderr, "%s:%d: %s: " fmt,                           \
+           __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
+
 #endif /* ! PRINT_H */

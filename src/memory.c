@@ -191,10 +191,11 @@ reserve_memory (u32 size)
 void
 release_memory (void *memory)
 {
-  Partition *partition = NULL;
-  Bucket    *bucket    = NULL;
-  bool       found     = false;
-  u32        attempts  = 0;
+  Partition *partition    = NULL;
+  Bucket    *bucket       = NULL;
+  bool       found        = false;
+  u32        num_attempts = 0;
+  u32        max_attempts = 0;
   _Atomic (Bucket *) *elem = NULL;
   _Atomic (Bucket *) *used_list = NULL;
   _Atomic (Bucket *) *free_list = NULL;
@@ -211,12 +212,16 @@ release_memory (void *memory)
 
  restart_from_the_top:
 
-  if (++attempts > 5)
+  // Try harder for bigger sizes
+  max_attempts = __builtin_ffs (partition->size >> 4);
+  if (max_attempts == 0)
+    max_attempts = 1;
+
+  if (++num_attempts > max_attempts)
     {
       // @Leak
-      fprintf (stderr, "%s:%d: %s: Leaked %u bytes\n",
-               __FILE__, __LINE__, __FUNCTION__,
-               partition->size);
+      err_print ("Leaked %u bytes after %u attempts\n",
+                 partition->size, max_attempts);
       return;
     }
 

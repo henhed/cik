@@ -96,18 +96,14 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
   entry = lock_and_get_cache_entry (get_map_for_key (key), key);
   if (!entry)
     {
-#if DEBUG
-      printf (RED ("GET") "[%X]: '%.*s'\n",
-              client->worker->id, klen, tmp_key_data);
-#endif
+      dbg_print (RED ("GET") "[%X]: '%.*s'\n",
+                 client->worker->id, klen, tmp_key_data);
       ++client->counters.get_miss;
       return STATUS_NOT_FOUND;
     }
 
-#if DEBUG
-  printf (GREEN ("GET") "[%X]: '%.*s'\n",
-          client->worker->id, klen, tmp_key_data);
-#endif
+  dbg_print (GREEN ("GET") "[%X]: '%.*s'\n",
+             client->worker->id, klen, tmp_key_data);
 
   if (~flags & GET_FLAG_IGNORE_EXPIRES)
     {
@@ -267,10 +263,8 @@ handle_set_request (Client *client, Request *request)
 
   UNLOCK_ENTRY (entry);
 
-#if DEBUG
-  printf (BLUE ("SET") "[%X]: '%.*s'\n",
-          client->worker->id, klen, tmp_key_data);
-#endif
+  dbg_print (BLUE ("SET") "[%X]: '%.*s'\n",
+             client->worker->id, klen, tmp_key_data);
 
   ++client->counters.set;
 
@@ -282,9 +276,7 @@ delete_entry_by_key (CacheKey key)
 {
   CacheEntry *entry = NULL;
 
-#if DEBUG
-  printf (YELLOW ("DEL") ": '%.*s'\n", key.nmemb, key.base);
-#endif
+  dbg_print (YELLOW ("DEL") ": '%.*s'\n", key.nmemb, key.base);
 
   // Unmap entry
   entry = lock_and_unset_cache_entry (get_map_for_key (key), key);
@@ -336,8 +328,9 @@ clear_all_callback (CacheEntry *entry, void *user_data)
 
 #if DEBUG
   assert (entry);
-  printf (YELLOW ("DEL") ": '%.*s'\n", entry->key.nmemb, entry->key.base);
 #endif
+
+  dbg_print (YELLOW ("DEL") ": '%.*s'\n", entry->key.nmemb, entry->key.base);
 
   for (u8 t = 0; t < entry->tags.nmemb; ++t)
     remove_key_from_tag (entry->tags.base[t], entry->key);
@@ -414,17 +407,13 @@ handle_clr_request (Client *client, Request *request)
   switch (mode)
     {
     case CLEAR_MODE_ALL:
-#if DEBUG
-        printf (YELLOW ("CLR") "[%X]: (MATCH ALL)\n", client->worker->id);
-#endif
+      dbg_print (YELLOW ("CLR") "[%X]: (MATCH ALL)\n", client->worker->id);
       walk_all_entries (clear_all_callback, NULL);
       return STATUS_OK;
     case CLEAR_MODE_OLD:
       {
         time_t now = time (NULL);
-#if DEBUG
-        printf (YELLOW ("CLR") "[%X]: (MATCH OLD)\n", client->worker->id);
-#endif
+        dbg_print (YELLOW ("CLR") "[%X]: (MATCH OLD)\n", client->worker->id);
         walk_all_entries (clear_old_callback, &now);
         return STATUS_OK;
       }
@@ -432,10 +421,10 @@ handle_clr_request (Client *client, Request *request)
       {
         CacheTagArray tag_array = { .base = tags, .nmemb = ntags };
 #if DEBUG
-        printf (YELLOW ("CLR") "[%X]: (MATCH NONE)", client->worker->id);
+        dbg_print (YELLOW ("CLR") "[%X]: (MATCH NONE)", client->worker->id);
         for (u8 t = 0; t < ntags; ++t)
-          printf (" '%.*s'", tags[t].nmemb, tags[t].base);
-        printf ("\n");
+          dbg_print (" '%.*s'", tags[t].nmemb, tags[t].base);
+        dbg_print ("\n");
 #endif
         walk_all_entries (clear_non_matching_callback, &tag_array);
         return STATUS_OK;
@@ -445,11 +434,11 @@ handle_clr_request (Client *client, Request *request)
       {
         KeyElem *keys = NULL;
 #if DEBUG
-        printf (YELLOW ("CLR") "[%X]: (MATCH %s)", client->worker->id,
+        dbg_print (YELLOW ("CLR") "[%X]: (MATCH %s)", client->worker->id,
                 (mode == CLEAR_MODE_MATCH_ALL) ? "ALL" : "ANY");
         for (u8 t = 0; t < ntags; ++t)
-          printf (" '%.*s'", tags[t].nmemb, tags[t].base);
-        printf ("\n");
+          dbg_print (" '%.*s'", tags[t].nmemb, tags[t].base);
+        dbg_print ("\n");
 #endif
         keys = (mode == CLEAR_MODE_MATCH_ALL)
           ? get_keys_matching_all_tags (tags, ntags)
@@ -708,9 +697,8 @@ handle_nfo_request (Client *client, Request *request, Payload **response_payload
   else
     {
       // @Incomplete: Filling percentage etc.
-#if DEBUG
-      printf (RED ("NFO") "[%X]: Not implemented for empty tag\n", client->worker->id);
-#endif
+      dbg_print (RED ("NFO") "[%X]: Not implemented for empty tag\n",
+                 client->worker->id);
       return STATUS_BUG;
     }
 

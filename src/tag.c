@@ -61,6 +61,8 @@ create_tag_node (CacheTag tag)
 static bool
 insert_if_unique (KeyElem **list, CacheKey key)
 {
+  // @Incomplete: MT-safety!
+
   KeyElem *elem;
 #if DEBUG
   assert (list != NULL);
@@ -110,13 +112,9 @@ compare_tags (CacheTag a, CacheTag b)
 #define TAG_NODE_RIGHT(t) atomic_load (&(t)->right)
 
 static TagNode *
-get_or_create_node (TagNode *parent, CacheTag tag)
+get_or_create_node (CacheTag tag)
 {
-#if DEBUG
-  assert (parent);
-#endif
-
-  static TagNode *nulltag = NULL;
+  TagNode *parent = &root;
 
   for (;;)
     {
@@ -126,15 +124,15 @@ get_or_create_node (TagNode *parent, CacheTag tag)
           TagNode *left = TAG_NODE_LEFT (parent);
           if (left == NULL)
             {
+              TagNode *expected = NULL;
               left = create_tag_node (tag);
-              if (!atomic_compare_exchange_strong (&parent->left, &nulltag, left))
+              if (!atomic_compare_exchange_strong (&parent->left, &expected, left))
                 {
                   // We lost a race, release node
-                  nulltag = NULL;
                   release_memory (left);
                   left = TAG_NODE_LEFT (parent);
+                  dbg_print ("Race to add tag: %.*s\n", tag.nmemb, tag.base);
 #if DEBUG
-                  fprintf (stderr, "Race to add tag: %.*s\n", tag.nmemb, tag.base);
                   assert (left != NULL);
 #endif
                 }
@@ -146,15 +144,15 @@ get_or_create_node (TagNode *parent, CacheTag tag)
           TagNode *right = TAG_NODE_RIGHT (parent);
           if (right == NULL)
             {
+              TagNode *expected = NULL;
               right = create_tag_node (tag);
-              if (!atomic_compare_exchange_strong (&parent->right, &nulltag, right))
+              if (!atomic_compare_exchange_strong (&parent->right, &expected, right))
                 {
                   // We lost a race, release node
-                  nulltag = NULL;
                   release_memory (right);
                   right = TAG_NODE_RIGHT (parent);
+                  dbg_print ("Race to add tag: %.*s\n", tag.nmemb, tag.base);
 #if DEBUG
-                  fprintf (stderr, "Race to add tag: %.*s\n", tag.nmemb, tag.base);
                   assert (right != NULL);
 #endif
                 }
@@ -216,9 +214,7 @@ copy_key_list (KeyElem *list)
 void
 add_key_to_tag (CacheTag tag, CacheKey key)
 {
-  // @Incomplete: MT-safety!
-
-  TagNode *node = get_or_create_node (&root, tag);
+  TagNode *node = get_or_create_node (tag);
 #if DEBUG
   assert (node != NULL);
 #endif
