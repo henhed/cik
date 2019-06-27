@@ -5,6 +5,13 @@
 # define DEBUG 0
 #endif
 
+#if DEBUG
+# include <assert.h>
+# define cik_assert assert
+#else
+# define cik_assert(expr)
+#endif
+
 // This config amounts roughly 2G memory
 // 512K entries of size 256 Bytes
 // ..

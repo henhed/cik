@@ -4,11 +4,6 @@
 #include "entry.h"
 #include "print.h"
 
-#if DEBUG
-# include <assert.h>
-# include <stdio.h>
-#endif
-
 #define LOCK_SLOT(m, s) \
   do {} while (atomic_flag_test_and_set_explicit (&(map)->guards[s], \
                                                   memory_order_acquire))
@@ -33,9 +28,7 @@ get_key_hash (CacheKey key)
 void
 init_cache_entry_map (CacheEntryHashMap *map)
 {
-#if DEBUG
-  assert (map);
-#endif
+  cik_assert (map);
 
   for (u32 i = 0; i < CACHE_ENTRY_MAP_SIZE; ++i)
     {
@@ -60,10 +53,8 @@ lock_and_get_cache_entry (CacheEntryHashMap *map, CacheKey key)
 {
   u32 hash, slot, pos;
 
-#if DEBUG
-  assert (map);
-  assert (key.base);
-#endif
+  cik_assert (map);
+  cik_assert (key.base);
 
   hash = get_key_hash (key);
   slot = hash % CACHE_ENTRY_MAP_SIZE;
@@ -78,15 +69,13 @@ lock_and_get_cache_entry (CacheEntryHashMap *map, CacheKey key)
             {
               if (!TRY_LOCK_ENTRY (map->entries[pos]))
                 {
-#if DEBUG
-                  fprintf (stderr, "%s: SPINNING \"%.*s\"\n", __FUNCTION__,
-                           map->entries[pos]->key.nmemb, map->entries[pos]->key.base);
-#endif
+                  err_print ("SPINNING \"%.*s\"\n",
+                             map->entries[pos]->key.nmemb,
+                             map->entries[pos]->key.base);
                   LOCK_ENTRY (map->entries[pos]);
-#if DEBUG
-                  fprintf (stderr, "%s: GOT LOCK \"%.*s\"\n", __FUNCTION__,
-                           map->entries[pos]->key.nmemb, map->entries[pos]->key.base);
-#endif
+                  err_print ("GOT LOCK \"%.*s\"\n",
+                             map->entries[pos]->key.nmemb,
+                             map->entries[pos]->key.base);
                 }
               if (CMP_KEYS (map->entries[pos]->key, key))
                 {
@@ -111,10 +100,8 @@ lock_and_unset_cache_entry (CacheEntryHashMap *map, CacheKey key)
 {
   u32 hash, slot, pos;
 
-#if DEBUG
-  assert (map);
-  assert (key.base);
-#endif
+  cik_assert (map);
+  cik_assert (key.base);
 
   hash = get_key_hash (key);
   slot = hash % CACHE_ENTRY_MAP_SIZE;
@@ -129,15 +116,13 @@ lock_and_unset_cache_entry (CacheEntryHashMap *map, CacheKey key)
             {
               if (!TRY_LOCK_ENTRY (map->entries[pos]))
                 {
-#if DEBUG
-                  fprintf (stderr, "%s: SPINNING \"%.*s\"\n", __FUNCTION__,
-                           map->entries[pos]->key.nmemb, map->entries[pos]->key.base);
-#endif
+                  err_print ("SPINNING \"%.*s\"\n",
+                             map->entries[pos]->key.nmemb,
+                             map->entries[pos]->key.base);
                   LOCK_ENTRY (map->entries[pos]);
-#if DEBUG
-                  fprintf (stderr, "%s: GOT LOCK \"%.*s\"\n", __FUNCTION__,
-                           map->entries[pos]->key.nmemb, map->entries[pos]->key.base);
-#endif
+                  err_print ("GET LOCK \"%.*s\"\n",
+                             map->entries[pos]->key.nmemb,
+                             map->entries[pos]->key.base);
                 }
               if (CMP_KEYS (map->entries[pos]->key, key))
                 {
@@ -168,12 +153,10 @@ set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
   bool found = false;
   u32 hash, slot, pos;
 
-#if DEBUG
-  assert (map);
-  assert (entry->key.base);
-  assert (entry->value.base);
-  assert (old_entry != NULL);
-#endif
+  cik_assert (map);
+  cik_assert (entry->key.base);
+  cik_assert (entry->value.base);
+  cik_assert (old_entry != NULL);
 
   hash = get_key_hash (entry->key);
   slot = hash % CACHE_ENTRY_MAP_SIZE;
@@ -187,36 +170,24 @@ set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
           if (map->hashes[pos] == hash)
             {
               CacheEntry *occupant = map->entries[pos];
-#if DEBUG
-              assert (occupant != NULL);
-#endif
+              cik_assert (occupant != NULL);
               if (occupant == entry)
                 {
-#if DEBUG
-                  fprintf (stderr, "ALREADY SET \"%.*s\"\n",
-                           entry->key.nmemb, entry->key.base);
-#endif
+                  err_print ("ALREADY SET \"%.*s\"\n",
+                             entry->key.nmemb, entry->key.base);
                   UNLOCK_SLOT (map, pos);
                   return true;
                 }
 
               if (!TRY_LOCK_ENTRY (occupant))
                 {
-#if DEBUG
-                  fprintf (stderr, "%s: SPINNING \"%.*s\"\n",
-                           __FUNCTION__, entry->key.nmemb, entry->key.base);
-#endif
+                  err_print ("SPINNING \"%.*s\"\n", entry->key.nmemb, entry->key.base);
                   LOCK_ENTRY (occupant);
-#if DEBUG
-                  fprintf (stderr, "%s: GOT LOCK \"%.*s\"\n",
-                           __FUNCTION__, entry->key.nmemb, entry->key.base);
-#endif
+                  err_print ("GOT LOCK \"%.*s\"\n", entry->key.nmemb, entry->key.base);
                 }
               if (CMP_ENTRY_KEYS (occupant, entry))
                 {
-#if DEBUG
-                  assert (*old_entry != entry);
-#endif
+                  cik_assert (*old_entry != entry);
                   *old_entry = occupant; // Caller now own entry lock
                   found = true;
                   break; // slot is still locked
@@ -245,9 +216,8 @@ set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
 
   if (!found)
     {
-#if DEBUG
-      fprintf (stderr, "[%s] We didn't find anything!\n", __FUNCTION__);
-#endif
+      err_print ("No slot found for \"%.*s\"\n",
+                 entry->key.nmemb, entry->key.base);
       return false;
     }
 
@@ -263,10 +233,8 @@ void
 walk_entries (CacheEntryHashMap *map, CacheEntryWalkCb callback,
               void *user_data)
 {
-#if DEBUG
-  assert (map);
-  assert (callback);
-#endif
+  cik_assert (map);
+  cik_assert (callback);
 
   for (u32 pos = 0; pos < CACHE_ENTRY_MAP_SIZE; ++pos)
     {
@@ -274,20 +242,13 @@ walk_entries (CacheEntryHashMap *map, CacheEntryWalkCb callback,
       if (map->mask[pos])
         {
           CacheEntry *entry = map->entries[pos];
-#if DEBUG
-          assert (entry != NULL);
-#endif
+          cik_assert (entry != NULL);
+
           if (!TRY_LOCK_ENTRY (entry))
             {
-#if DEBUG
-              fprintf (stderr, "%s: SPINNING \"%.*s\"\n",
-                       __FUNCTION__, entry->key.nmemb, entry->key.base);
-#endif
+              err_print ("SPINNING \"%.*s\"\n", entry->key.nmemb, entry->key.base);
               LOCK_ENTRY (entry);
-#if DEBUG
-              fprintf (stderr, "%s: GOT LOCK \"%.*s\"\n",
-                       __FUNCTION__, entry->key.nmemb, entry->key.base);
-#endif
+              err_print ("GOT LOCK \"%.*s\"\n", entry->key.nmemb, entry->key.base);
             }
 
           if (callback (entry, user_data))

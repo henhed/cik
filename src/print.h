@@ -23,7 +23,7 @@
 #endif
 
 #define err_print(fmt, ...)                                     \
-  fprintf (stderr, "%s:%d: %s: " fmt,                           \
+  fprintf (stderr, RED ("E") " %s:%d: %s: " fmt,                \
            __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
 
 #endif /* ! PRINT_H */

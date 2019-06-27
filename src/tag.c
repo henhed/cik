@@ -6,9 +6,25 @@
 #include "memory.h"
 #include "print.h"
 
-#if DEBUG
-# include <assert.h>
-#endif
+#define LOCK_KEYS(t) \
+  do {} while (atomic_flag_test_and_set_explicit (&(t)->keys_lock, memory_order_acquire))
+#define UNLOCK_KEYS(t) \
+  atomic_flag_clear_explicit (&(t)->keys_lock, memory_order_release)
+#define TRY_LOCK_KEYS(t) \
+  (!atomic_flag_test_and_set_explicit (&(t)->keys_lock, memory_order_acquire))
+
+#define LOCK_KEYS_AND_LOG_SPIN(t)                                         \
+  do {                                                                    \
+    if (!TRY_LOCK_KEYS (t))                                               \
+      {                                                                   \
+        err_print ("SPINNING \"%.*s\"\n", (t)->tag.nmemb, (t)->tag.base); \
+        LOCK_KEYS (t);                                                    \
+        err_print ("GOT LOCK \"%.*s\"\n", (t)->tag.nmemb, (t)->tag.base); \
+      }                                                                   \
+  } while (0)
+
+#define TAG_NODE_LEFT(t)  atomic_load (&(t)->left)
+#define TAG_NODE_RIGHT(t) atomic_load (&(t)->right)
 
 static u8 root_value[] = { 'R', 'O', 'O', 'T' };
 static TagNode root = {
@@ -48,25 +64,21 @@ create_tag_node (CacheTag tag)
 {
   TagNode *node;
   node = reserve_memory (sizeof (TagNode) + (sizeof (u8) * tag.nmemb));
-#if DEBUG
-  assert (node != NULL);
-#endif
+  cik_assert (node != NULL);
   *node = (TagNode) { 0 };
   node->tag.base = (u8 *) (node + 1);
   node->tag.nmemb = tag.nmemb;
   memcpy (node->tag.base, tag.base, tag.nmemb);
+  node->keys_lock = (atomic_flag) ATOMIC_FLAG_INIT;
   return node;
 }
 
 static bool
 insert_if_unique (KeyElem **list, CacheKey key)
 {
-  // @Incomplete: MT-safety!
-
   KeyElem *elem;
-#if DEBUG
-  assert (list != NULL);
-#endif
+
+  cik_assert (list != NULL);
 
   for (elem = *list; elem != NULL; elem = elem->next)
     {
@@ -75,9 +87,7 @@ insert_if_unique (KeyElem **list, CacheKey key)
     }
 
   elem = create_key_elem (key);
-#if DEBUG
-  assert (elem != NULL);
-#endif
+  cik_assert (elem != NULL);
 
   if (elem != NULL)
     {
@@ -108,9 +118,6 @@ compare_tags (CacheTag a, CacheTag b)
   return result;
 }
 
-#define TAG_NODE_LEFT(t)  atomic_load (&(t)->left)
-#define TAG_NODE_RIGHT(t) atomic_load (&(t)->right)
-
 static TagNode *
 get_or_create_node (CacheTag tag)
 {
@@ -132,9 +139,7 @@ get_or_create_node (CacheTag tag)
                   release_memory (left);
                   left = TAG_NODE_LEFT (parent);
                   dbg_print ("Race to add tag: %.*s\n", tag.nmemb, tag.base);
-#if DEBUG
-                  assert (left != NULL);
-#endif
+                  cik_assert (left != NULL);
                 }
             }
           parent = left;
@@ -152,9 +157,7 @@ get_or_create_node (CacheTag tag)
                   release_memory (right);
                   right = TAG_NODE_RIGHT (parent);
                   dbg_print ("Race to add tag: %.*s\n", tag.nmemb, tag.base);
-#if DEBUG
-                  assert (right != NULL);
-#endif
+                  cik_assert (right != NULL);
                 }
             }
           parent = right;
@@ -165,9 +168,7 @@ get_or_create_node (CacheTag tag)
         }
     }
 
-#if DEBUG
-  assert (false);
-#endif
+  cik_assert (false);
   return NULL;
 }
 
@@ -192,13 +193,6 @@ get_tag_if_exists (CacheTag tag)
 }
 
 static KeyElem *
-get_keys_by_tag (CacheTag tag)
-{
-  TagNode *node = get_tag_if_exists (tag);
-  return (node != NULL) ? node->keys : NULL;
-}
-
-static KeyElem *
 copy_key_list (KeyElem *list)
 {
   KeyElem *new_list = NULL;
@@ -211,24 +205,44 @@ copy_key_list (KeyElem *list)
   return new_list;
 }
 
+static KeyElem *
+get_key_list_copy_by_tag (CacheTag tag)
+{
+  KeyElem *copy = NULL;
+  TagNode *node = get_tag_if_exists (tag);
+  if (!node)
+    return NULL;
+  LOCK_KEYS_AND_LOG_SPIN (node);
+  copy = copy_key_list (node->keys);
+  UNLOCK_KEYS (node);
+  return copy;
+}
+
 void
 add_key_to_tag (CacheTag tag, CacheKey key)
 {
   TagNode *node = get_or_create_node (tag);
-#if DEBUG
-  assert (node != NULL);
-#endif
+
+  cik_assert (node != NULL);
+
+  if (node == NULL)
+    return;
+
+  LOCK_KEYS_AND_LOG_SPIN (node);
+
   insert_if_unique (&node->keys, key);
+
+  UNLOCK_KEYS (node);
 }
 
 void
 remove_key_from_tag (CacheTag tag, CacheKey key)
 {
-  // @Incomplete: MT-safety!
-
   TagNode *node = get_tag_if_exists (tag);
   if (node == NULL)
     return;
+
+  LOCK_KEYS_AND_LOG_SPIN (node);
 
   for (KeyElem **elem = &node->keys; *elem; elem = &(*elem)->next)
     {
@@ -240,6 +254,8 @@ remove_key_from_tag (CacheTag tag, CacheKey key)
           break; // We assume there are no dupes (`insert_if_unique').
         }
     }
+
+  UNLOCK_KEYS (node);
 }
 
 void
@@ -250,27 +266,24 @@ walk_all_tags (CacheTagWalkCb callback, void *user_data)
   TagNode *stack[stack_cap];
   TagNode *current = &root;
 
-#if DEBUG
-  assert (callback);
-#endif
+  cik_assert (callback);
 
   while ((current != NULL) || (stack_nmemb > 0))
     {
       while (current != NULL)
         {
-#if DEBUG
-          assert (stack_nmemb < stack_cap);
-#endif
+          cik_assert (stack_nmemb < stack_cap);
           stack[stack_nmemb++] = current;
           current = TAG_NODE_LEFT (current);
         }
 
-#if DEBUG
-      assert (stack_nmemb > 0);
-#endif
+      cik_assert (stack_nmemb > 0);
       current = stack[--stack_nmemb];
 
-      if (current->keys != NULL) // @Incomplete: MT-safety
+      LOCK_KEYS_AND_LOG_SPIN (current);
+      bool has_keys = (current->keys != NULL);
+      UNLOCK_KEYS (current);
+      if (has_keys)
         {
           bool result = callback (current->tag, user_data);
           (void) result;
@@ -298,23 +311,18 @@ release_key_list (KeyElem *elem)
 KeyElem *
 get_keys_matching_any_tag (CacheTag *tags, u8 ntags)
 {
-  // @Incomplete: MT-safety!
-
-#if DEBUG
-  assert (tags != NULL);
-#endif
-
   KeyElem *found_keys = NULL;
 
   if (ntags == 0)
     return NULL;
 
-  found_keys = get_keys_by_tag (tags[0]); // Maybe `get_and_lock_keys_by_tag'
-  found_keys = copy_key_list   (found_keys); // .. then release lock after copy
+  cik_assert (tags != NULL);
+
+  found_keys = get_key_list_copy_by_tag (tags[0]);
 
   for (u8 t = 1; t < ntags; ++t)
     {
-      KeyElem *keys = get_keys_by_tag (tags[t]); // .. and lock here too
+      KeyElem *keys = get_key_list_copy_by_tag (tags[t]);
 
       for (KeyElem **tag_key = &keys;
            *tag_key;
@@ -322,6 +330,8 @@ get_keys_matching_any_tag (CacheTag *tags, u8 ntags)
         {
           insert_if_unique (&found_keys, (*tag_key)->key);
         }
+
+      release_key_list (keys);
     }
 
   return found_keys;
@@ -330,23 +340,18 @@ get_keys_matching_any_tag (CacheTag *tags, u8 ntags)
 KeyElem *
 get_keys_matching_all_tags (CacheTag *tags, u8 ntags)
 {
-  // @Incomplete: MT-safety!
-
-#if DEBUG
-  assert (tags != NULL);
-#endif
-
   KeyElem *found_keys = NULL;
 
   if (ntags == 0)
     return NULL;
 
-  found_keys = get_keys_by_tag (tags[0]); // Maybe `get_and_lock_keys_by_tag'
-  found_keys = copy_key_list   (found_keys); // .. then release lock after copy
+  cik_assert (tags != NULL);
+
+  found_keys = get_key_list_copy_by_tag (tags[0]);
 
   for (u8 t = 1; t < ntags; ++t)
     {
-      KeyElem *keys = get_keys_by_tag (tags[t]); // .. and lock here too
+      KeyElem *keys = get_key_list_copy_by_tag (tags[t]);
 
       for (KeyElem **found_key = &found_keys;
            *found_key;
@@ -376,6 +381,8 @@ get_keys_matching_all_tags (CacheTag *tags, u8 ntags)
                 break;
             }
         }
+
+      release_key_list (keys);
     }
 
   return found_keys;
@@ -443,31 +450,28 @@ debug_print_tags (int fd)
     {
       while (current != NULL)
         {
-#if DEBUG
-          assert (stack_nmemb < stack_cap);
-#endif
+          cik_assert (stack_nmemb < stack_cap);
           stack[stack_nmemb++] = current;
           current = TAG_NODE_LEFT (current);
         }
 
-#if DEBUG
-      assert (stack_nmemb > 0);
-#endif
+      cik_assert (stack_nmemb > 0);
       current = stack[--stack_nmemb];
 
       {
         DebugTag *dt = NULL;
-#if DEBUG
-        assert (debug_tag_nmemb < debug_tag_cap);
-#endif
+        cik_assert (debug_tag_nmemb < debug_tag_cap);
+
         dt = &debug_tags[debug_tag_nmemb++];
 
         dt->tag        = current->tag;
         dt->tree_depth = stack_nmemb;
         dt->num_keys   = 0;
 
+        LOCK_KEYS_AND_LOG_SPIN (current);
         for (KeyElem **elem = &current->keys; *elem; elem = &(*elem)->next)
           ++dt->num_keys;
+        UNLOCK_KEYS (current);
       }
 
       current = TAG_NODE_RIGHT (current);
