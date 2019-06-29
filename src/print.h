@@ -22,6 +22,10 @@
 # define dbg_print(fmt, ...)
 #endif
 
+#define wrn_print(fmt, ...)                                     \
+  fprintf (stderr, YELLOW ("W") " %s:%d: %s: " fmt,             \
+           __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
+
 #define err_print(fmt, ...)                                     \
   fprintf (stderr, RED ("E") " %s:%d: %s: " fmt,                \
            __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)

@@ -7,10 +7,7 @@
 #include "profiler.h"
 #include "server.h"
 #include "tag.h"
-
-#if DEBUG
-# include <assert.h>
-#endif
+#include "util.h"
 
 #if __BIG_ENDIAN__
 # define htonll(x) (x)
@@ -23,19 +20,36 @@
 static inline CacheEntryHashMap *
 get_map_for_key (CacheKey key)
 {
-  // @Revisit: Right now we look for entropy at the end of the key data. If we
-  // always invert keys & tags we should look at the beginning here instead.
-  // See @Speed note in `handle_set_request'.
   u32 map_index = 0;
   if (key.nmemb >= sizeof (u64))
-    map_index = (*(u64 *) &key.base[key.nmemb - sizeof (u64)]) % NUM_CACHE_ENTRY_MAPS;
+    map_index = (*(u64 *) key.base) % NUM_CACHE_ENTRY_MAPS;
   else if (key.nmemb >= sizeof (u32))
-    map_index = (*(u32 *) &key.base[key.nmemb - sizeof (u32)]) % NUM_CACHE_ENTRY_MAPS;
+    map_index = (*(u32 *) key.base) % NUM_CACHE_ENTRY_MAPS;
   else if (key.nmemb >= sizeof (u16))
-    map_index = (*(u16 *) &key.base[key.nmemb - sizeof (u16)]) % NUM_CACHE_ENTRY_MAPS;
+    map_index = (*(u16 *) key.base) % NUM_CACHE_ENTRY_MAPS;
   else if (key.nmemb >= sizeof (u8))
-    map_index = key.base[key.nmemb - 1] % NUM_CACHE_ENTRY_MAPS;
+    map_index = (*(u8 *)  key.base) % NUM_CACHE_ENTRY_MAPS;
   return entry_maps[map_index];
+}
+
+static StatusCode
+read_request_key (Client *client, CacheKey key)
+{
+  StatusCode status;
+
+  cik_assert (client != NULL);
+  cik_assert (key.base != NULL);
+
+  status = read_request_payload (client, key.base, key.nmemb);
+  if (status != STATUS_OK)
+    return status;
+
+  // Both keys and tags tend to be prefixed and so in general they have more
+  // entropy at the end. Hence we store them in reverse byte order to improve
+  // hash map distribution and early exit memcmp.
+  reverse_data (key.base, key.nmemb);
+
+  return STATUS_OK;
 }
 
 static StatusCode
@@ -62,6 +76,8 @@ read_tags_using_payload_buffer (Client *client, CacheTag *tags, u8 ntags)
       tag->base = buffer;
       buffer += tag->nmemb;
       buffer_cap -= tag->nmemb;
+
+      reverse_data (tag->base, tag->nmemb);
     }
 
   client->worker->payload_buffer.nmemb = (client->worker->payload_buffer.cap
@@ -85,25 +101,22 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
   CacheKey key;
   u8 tmp_key_data[0xFF];
 
-  // Read key
-  status = read_request_payload (client, tmp_key_data, klen);
+  key.base  = tmp_key_data;
+  key.nmemb = klen;
+
+  status = read_request_key (client, key);
   if (status != STATUS_OK)
     return status;
-
-  key.base = tmp_key_data;
-  key.nmemb = klen;
 
   entry = lock_and_get_cache_entry (get_map_for_key (key), key);
   if (!entry)
     {
-      dbg_print (RED ("GET") "[%X]: '%.*s'\n",
-                 client->worker->id, klen, tmp_key_data);
+      dbg_print (RED ("GET") "[%X]: '%s'\n", client->worker->id, key2str (key));
       ++client->counters.get_miss;
       return STATUS_NOT_FOUND;
     }
 
-  dbg_print (GREEN ("GET") "[%X]: '%.*s'\n",
-             client->worker->id, klen, tmp_key_data);
+  dbg_print (GREEN ("GET") "[%X]: '%s'\n", client->worker->id, key2str (key));
 
   if (~flags & GET_FLAG_IGNORE_EXPIRES)
     {
@@ -160,9 +173,7 @@ handle_set_request (Client *client, Request *request)
   CacheTag tags[ntags];
 
   // Read key
-  status = read_request_payload (client, tmp_key_data, klen);
-  if (status != STATUS_OK)
-    return status;
+  status = read_request_key (client, (CacheKey) {tmp_key_data, klen});
 
   // @Incomplete: Use key here and look if we have an existing entry
   // in the hash table already. If so, reuse it's memory if possible.
@@ -181,17 +192,10 @@ handle_set_request (Client *client, Request *request)
 
   total_size = tlen + klen + vlen;
 
-  // @Speed: Both keys and tags tend to be prefixed and so in general they
-  // should have more entropy at near end. If we store keys and tags in reverse
-  // byte order we should help memcpy to exit early.
-
   entry = reserve_and_lock_entry (total_size);
   if (entry == NULL)
     {
-#if DEBUG
-      fprintf (stderr, "%s: @Incomplete: Evict something (%.*s)\n", __FUNCTION__,
-               entry->key.nmemb, entry->key.base);
-#endif
+      err_print ("@Incomplete: Evict something (%s)\n", key2str (entry->key));
       return STATUS_OUT_OF_MEMORY;
     }
 
@@ -219,9 +223,7 @@ handle_set_request (Client *client, Request *request)
   entry->value.nmemb = vlen;
   payload += vlen;
 
-#if DEBUG
-  assert ((u32) (payload - (u8 *) (entry + 1)) == total_size);
-#endif
+  cik_assert ((u32) (payload - (u8 *) (entry + 1)) == total_size);
 
   status = read_request_payload (client, entry->value.base, vlen);
   if (status != STATUS_OK)
@@ -238,11 +240,8 @@ handle_set_request (Client *client, Request *request)
 
   if (!set_locked_cache_entry (get_map_for_key (entry->key), entry, &old_entry))
     {
-#if DEBUG
-      assert (old_entry == NULL);
-      fprintf (stderr, "%s: @Incomplete: Evict something (%.*s)\n", __FUNCTION__,
-               entry->key.nmemb, entry->key.base);
-#endif
+      cik_assert (old_entry == NULL);
+      err_print ("@Incomplete: Evict something (%s)\n", key2str (entry->key));
       UNLOCK_ENTRY (entry);
       release_memory (entry);
       return STATUS_OUT_OF_MEMORY;
@@ -263,8 +262,8 @@ handle_set_request (Client *client, Request *request)
 
   UNLOCK_ENTRY (entry);
 
-  dbg_print (BLUE ("SET") "[%X]: '%.*s'\n",
-             client->worker->id, klen, tmp_key_data);
+  dbg_print (BLUE ("SET") "[%X]: '%s'\n",
+             client->worker->id, key2str ((CacheKey) {tmp_key_data, klen}));
 
   ++client->counters.set;
 
@@ -276,7 +275,7 @@ delete_entry_by_key (CacheKey key)
 {
   CacheEntry *entry = NULL;
 
-  dbg_print (YELLOW ("DEL") ": '%.*s'\n", key.nmemb, key.base);
+  dbg_print (YELLOW ("DEL") ": '%s'\n", key2str (key));
 
   // Unmap entry
   entry = lock_and_unset_cache_entry (get_map_for_key (key), key);
@@ -311,8 +310,7 @@ handle_del_request (Client *client, Request *request)
     .nmemb = request->d.klen
   };
 
-  // Read key
-  status = read_request_payload (client, key.base, key.nmemb);
+  status = read_request_key (client, key);
   if (status != STATUS_OK)
     return status;
 
@@ -326,11 +324,9 @@ clear_all_callback (CacheEntry *entry, void *user_data)
 {
   (void) user_data;
 
-#if DEBUG
-  assert (entry);
-#endif
+  cik_assert (entry);
 
-  dbg_print (YELLOW ("DEL") ": '%.*s'\n", entry->key.nmemb, entry->key.base);
+  dbg_print (YELLOW ("DEL") ": '%s'\n", key2str (entry->key));
 
   for (u8 t = 0; t < entry->tags.nmemb; ++t)
     remove_key_from_tag (entry->tags.base[t], entry->key);
@@ -344,10 +340,8 @@ clear_all_callback (CacheEntry *entry, void *user_data)
 static bool
 clear_old_callback (CacheEntry *entry, time_t *now)
 {
-#if DEBUG
-  assert (entry);
-  assert (now);
-#endif
+  cik_assert (entry);
+  cik_assert (now);
 
   if ((entry->expires == CACHE_EXPIRES_INIT)
       || (entry->expires >= *now))
@@ -359,10 +353,8 @@ clear_old_callback (CacheEntry *entry, time_t *now)
 static bool
 clear_non_matching_callback (CacheEntry *entry, CacheTagArray *tags)
 {
-#if DEBUG
-  assert (entry);
-  assert (tags);
-#endif
+  cik_assert (entry);
+  cik_assert (tags);
 
   for (u8 i = 0; i < tags->nmemb; ++i)
     {
@@ -423,7 +415,7 @@ handle_clr_request (Client *client, Request *request)
 #if DEBUG
         dbg_print (YELLOW ("CLR") "[%X]: (MATCH NONE)", client->worker->id);
         for (u8 t = 0; t < ntags; ++t)
-          dbg_print (" '%.*s'", tags[t].nmemb, tags[t].base);
+          dbg_print (" '%s'", tag2str (tags[t]));
         dbg_print ("\n");
 #endif
         walk_all_entries (clear_non_matching_callback, &tag_array);
@@ -437,7 +429,7 @@ handle_clr_request (Client *client, Request *request)
         dbg_print (YELLOW ("CLR") "[%X]: (MATCH %s)", client->worker->id,
                 (mode == CLEAR_MODE_MATCH_ALL) ? "ALL" : "ANY");
         for (u8 t = 0; t < ntags; ++t)
-          dbg_print (" '%.*s'", tags[t].nmemb, tags[t].base);
+          dbg_print (" '%s'", tag2str (tags[t]));
         dbg_print ("\n");
 #endif
         keys = (mode == CLEAR_MODE_MATCH_ALL)
@@ -660,13 +652,12 @@ handle_nfo_request (Client *client, Request *request, Payload **response_payload
       u8          tmp_key_data[0xFF];
       u8         *tag_data = nfo->entry.stream_of_tags;
 
-      // Read key
-      status = read_request_payload (client, tmp_key_data, klen);
+      key.base  = tmp_key_data;
+      key.nmemb = klen;
+
+      status = read_request_key (client, key);
       if (status != STATUS_OK)
         return status;
-
-      key.base = tmp_key_data;
-      key.nmemb = klen;
 
       entry = lock_and_get_cache_entry (get_map_for_key (key), key);
       if (!entry)

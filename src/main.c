@@ -14,6 +14,7 @@
 #include "tag.h"
 #include "server.h"
 #include "profiler.h"
+#include "util.h"
 
 volatile atomic_bool quit;
 
@@ -139,16 +140,18 @@ write_entry_as_set_request_callback (CacheEntry *entry, int *fd)
     }
 
   write (*fd, &request, sizeof (request));
+  reverse_data (entry->key.base, entry->key.nmemb);
   write (*fd, entry->key.base, entry->key.nmemb);
   for (u8 t = 0; t < entry->tags.nmemb; ++t)
     {
       u8 tlen = entry->tags.base[t].nmemb;
       write (*fd, &tlen, sizeof (tlen));
+      reverse_data (entry->tags.base[t].base, tlen);
       write (*fd, entry->tags.base[t].base, tlen);
     }
   write (*fd, entry->value.base, entry->value.nmemb);
 
-  return false;
+  return true;
 }
 
 static bool

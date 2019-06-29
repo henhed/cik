@@ -1,10 +1,10 @@
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "tag.h"
 #include "memory.h"
 #include "print.h"
+#include "util.h"
 
 #define LOCK_KEYS(t) \
   do {} while (atomic_flag_test_and_set_explicit (&(t)->keys_lock, memory_order_acquire))
@@ -487,9 +487,8 @@ debug_print_tags (int fd)
   for (u32 i = 0; i < debug_tag_nmemb; ++i)
     {
       DebugTag *dt = &debug_tags[i];
-      dprintf (fd, "%-64.*s %6u %6u\n",
-               dt->tag.nmemb, dt->tag.base,
-               dt->num_keys,  dt->tree_depth);
+      dprintf (fd, "%-64s %6u %6u\n",
+               tag2str (dt->tag), dt->num_keys, dt->tree_depth);
 
       if (i == 9)
         break; // Only print top 10
