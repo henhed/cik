@@ -39,8 +39,10 @@ struct _Partition
 {
   u32        size;
   Partition *next;
-  _Atomic (Bucket *) used_buckets;
   _Atomic (Bucket *) free_buckets;
+  _Atomic (u32) num_used;
+  _Atomic (u32) num_free;
+  _Atomic (u32) num_reused;
 };
 
 CacheEntryHashMap **entry_maps = NULL;
@@ -107,8 +109,10 @@ init_memory ()
       partition->size = size;
       partition->next = partitions;
       partitions = partition;
-      atomic_init (&partition->used_buckets, NULL);
       atomic_init (&partition->free_buckets, NULL);
+      atomic_init (&partition->num_used, 0);
+      atomic_init (&partition->num_free, 0);
+      atomic_init (&partition->num_reused, 0);
     }
   push_memory (PADDING (total_partition_size));
 
@@ -140,7 +144,6 @@ reserve_memory (u32 size)
 {
   Bucket    *bucket    = NULL;
   Partition *partition = NULL;
-  _Atomic (Bucket *) *used_list = NULL;
   _Atomic (Bucket *) *free_list = NULL;
 
   for (Partition **p = &partitions; *p; p = &(*p)->next)
@@ -155,14 +158,19 @@ reserve_memory (u32 size)
   if (!partition)
     return NULL;
 
-  used_list = &partition->used_buckets;
   free_list = &partition->free_buckets;
 
   if (MARK_POINTER (free_list))
     {
       bucket = READ_POINTER (free_list);
       if (bucket)
-        WRITE_POINTER (free_list, bucket->next);
+        {
+          WRITE_POINTER (free_list, bucket->next);
+          atomic_fetch_sub_explicit (&partition->num_free, 1,
+                                     memory_order_relaxed);
+          atomic_fetch_add_explicit (&partition->num_reused, 1,
+                                     memory_order_relaxed);
+        }
       else
         UNMARK_POINTER (free_list);
     }
@@ -177,13 +185,7 @@ reserve_memory (u32 size)
       bucket->partition = partition;
     }
 
-  do
-    {
-      bucket->next = READ_POINTER (used_list);
-    }
-  while (!atomic_compare_exchange_weak (used_list,
-                                        (Bucket **) &bucket->next,
-                                        bucket));
+  atomic_fetch_add_explicit (&partition->num_used, 1, memory_order_relaxed);
 
   return bucket->data;
 }
@@ -191,83 +193,27 @@ reserve_memory (u32 size)
 void
 release_memory (void *memory)
 {
-  Partition *partition    = NULL;
-  Bucket    *bucket       = NULL;
-  bool       found        = false;
-  u32        num_attempts = 0;
-  u32        max_attempts = 0;
-  _Atomic (Bucket *) *elem = NULL;
-  _Atomic (Bucket *) *used_list = NULL;
+  Partition *partition = NULL;
+  Bucket    *bucket    = NULL;
   _Atomic (Bucket *) *free_list = NULL;
 
-#if DEBUG
-  assert (memory != NULL);
-#endif
+  cik_assert (memory != NULL);
 
   bucket    = (Bucket *) (((u8 *) memory) - TPADDED (Bucket));
   partition = bucket->partition;
 
-  used_list = &partition->used_buckets;
   free_list = &partition->free_buckets;
-
- restart_from_the_top:
-
-  // Try harder for bigger sizes
-  max_attempts = __builtin_ffs (partition->size >> 4);
-  if (max_attempts == 0)
-    max_attempts = 1;
-
-  if (++num_attempts > max_attempts)
-    {
-      // @Leak
-      err_print ("Leaked %u bytes after %u attempts\n",
-                 partition->size, max_attempts);
-      return;
-    }
-
-  for (elem = used_list;
-       READ_POINTER (elem) != NULL;
-       elem = &((Bucket *) READ_POINTER (elem))->next)
-    {
-      // Use a dedicated variable because it's overwritten if the CAS fails
-      Bucket *expected = bucket;
-
-      if (READ_POINTER (elem) != bucket)
-        continue;
-
-      bool was_marked = MARK_POINTER (&bucket->next);
-#if DEBUG
-      assert (was_marked == true);
-      assert ((((uintptr_t) bucket) & 0x1) == 0);
-#else
-      (void) was_marked;
-#endif
-
-      if (!atomic_compare_exchange_strong (elem, &expected,
-                                           READ_POINTER (&bucket->next)))
-        {
-          // Our bucket is `marked' we need to start over.
-          // .. or our bucket was unlinked from `elem' already maybe?
-          UNMARK_POINTER (&bucket->next);
-          goto restart_from_the_top;
-        }
-
-      found = true;
-      break;
-    }
-
-  if (!found)
-    goto restart_from_the_top;
 
   do
     {
       bucket->next = READ_POINTER (free_list);
-      // A thread looping through `used_list' above can see this value and jump
-      // into `free_list'. `found' will be `false' in that case.
     }
   while (!atomic_compare_exchange_weak (free_list,
                                         (Bucket **) &bucket->next,
                                         bucket));
+
+  atomic_fetch_add_explicit (&partition->num_free, 1, memory_order_relaxed);
+  atomic_fetch_sub_explicit (&partition->num_used, 1, memory_order_relaxed);
 }
 
 CacheEntry *
@@ -325,22 +271,14 @@ debug_print_memory (int fd)
                    100.f * ((float) memory_left / MAX_TOTAL_MEMORY));
   dprintf (fd, "%.*s\n", LINEWIDTH - count, HLINESTR);
 
-  dprintf (fd, "%-37s%-37s%s\n", "Item Size", "Used", "Free");
+  dprintf (fd, "%-24s%-24s%-24s%s\n", "Item Size", "Used", "Free", "Reused");
 
   for (Partition **p = &partitions; *p; p = &(*p)->next)
     {
       Partition *partition = *p;
-      u32 num_used = 0;
-      u32 num_free = 0;
-
-      for (_Atomic (Bucket *) *b = &partition->used_buckets;
-           READ_POINTER (b) != NULL;
-           b = &((Bucket *) READ_POINTER (b))->next)
-        ++num_used;
-      for (_Atomic (Bucket *) *b = &partition->free_buckets;
-           READ_POINTER (b) != NULL;
-           b = &((Bucket *) READ_POINTER (b))->next)
-        ++num_free;
+      u32 num_used   = atomic_load (&partition->num_used);
+      u32 num_free   = atomic_load (&partition->num_free);
+      u32 num_reused = atomic_load (&partition->num_reused);
 
       dprintf (fd, "%8u%s",
                ((partition->size >= mb)
@@ -351,8 +289,9 @@ debug_print_memory (int fd)
                ((partition->size >= mb)
                 ? "M"
                 : (partition->size >= kb ? "K" : "B")));
-      dprintf (fd, "                      %10u", num_used);
-      dprintf (fd, "                           %10u", num_free);
+      dprintf (fd, "         %10u", num_used);
+      dprintf (fd, "              %10u", num_free);
+      dprintf (fd, "                %10u", num_reused);
       dprintf (fd, "\n");
     }
 
