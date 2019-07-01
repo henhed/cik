@@ -166,21 +166,41 @@ handle_set_request (Client *client, Request *request)
   u32 vlen  = ntohl (request->s.vlen);
   u8  ntags = request->s.ntags;
   u32 ttl   = ntohl (request->s.ttl);
+  u8  flags = request->s.flags;
 
   u8      *payload;
   u8       tmp_key_data[0xFF];
   size_t   total_size;
   CacheTag tags[ntags];
+  CacheKey key = { .base = tmp_key_data, .nmemb = klen };
 
   // Read key
-  status = read_request_key (client, (CacheKey) {tmp_key_data, klen});
+  status = read_request_key (client, key);
 
-  // @Incomplete: Use key here and look if we have an existing entry
+  ++client->counters.set;
+
+  dbg_print (BLUE ("SET") "[%X]: '%s'\n", client->worker->id, key2str (key));
+
+  // @Revisit: Use key here and look if we have an existing entry
   // in the hash table already. If so, reuse it's memory if possible.
   // Right now we're always reserving new memory and releasing the old.
   // But who knows, maybe reserving new memory will be faster in the end.
 
-  // @Feature: Add TTL to existing entry
+  if (flags & SET_FLAG_ONLY_TTL)
+    {
+      // Just renew expiry time for entry, ignore tags and value
+      entry = lock_and_get_cache_entry (get_map_for_key (key), key);
+      if (!entry)
+        return STATUS_NOT_FOUND;
+
+      if (ttl == (u32) -1)
+        entry->expires = CACHE_EXPIRES_INIT;
+      else
+        entry->expires = time (NULL) + ttl;
+
+      UNLOCK_ENTRY (entry);
+      return STATUS_OK;
+    }
 
   status = read_tags_using_payload_buffer (client, tags, ntags);
   if (status != STATUS_OK)
@@ -190,14 +210,11 @@ handle_set_request (Client *client, Request *request)
   for (u8 t = 0; t < ntags; ++t)
     tlen += tags[t].nmemb;
 
-  total_size = tlen + klen + vlen;
+  total_size = tlen + key.nmemb + vlen;
 
   entry = reserve_and_lock_entry (total_size);
   if (entry == NULL)
-    {
-      err_print ("@Incomplete: Evict something (%s)\n", key2str (entry->key));
-      return STATUS_OUT_OF_MEMORY;
-    }
+    return STATUS_OUT_OF_MEMORY;
 
   payload = (u8 *) (entry + 1);
 
@@ -215,10 +232,10 @@ handle_set_request (Client *client, Request *request)
     }
 
   // Copy read key into reserved entry payload
-  memcpy (payload, tmp_key_data, klen);
+  memcpy (payload, key.base, key.nmemb);
   entry->key.base = payload;
-  entry->key.nmemb = klen;
-  payload += klen;
+  entry->key.nmemb = key.nmemb;
+  payload += key.nmemb;
   entry->value.base = payload;
   entry->value.nmemb = vlen;
   payload += vlen;
@@ -241,7 +258,6 @@ handle_set_request (Client *client, Request *request)
   if (!set_locked_cache_entry (get_map_for_key (entry->key), entry, &old_entry))
     {
       cik_assert (old_entry == NULL);
-      err_print ("@Incomplete: Evict something (%s)\n", key2str (entry->key));
       UNLOCK_ENTRY (entry);
       release_memory (entry);
       return STATUS_OUT_OF_MEMORY;
@@ -261,11 +277,6 @@ handle_set_request (Client *client, Request *request)
     add_key_to_tag (entry->tags.base[t], entry->key);
 
   UNLOCK_ENTRY (entry);
-
-  dbg_print (BLUE ("SET") "[%X]: '%s'\n",
-             client->worker->id, key2str ((CacheKey) {tmp_key_data, klen}));
-
-  ++client->counters.set;
 
   return STATUS_OK;
 }

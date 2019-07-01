@@ -224,7 +224,8 @@ get_status_code_name (StatusCode code)
 // char         3               's'   (OP code)
 // u8           4               Key length
 // u8           5               Tag count
-// u8[2]        6               Padding
+// u8           5               Flags
+// u8[1]        6               Padding
 // u32          8               Value length
 // u32          12              TTL in seconds
 // ..data       16              (key + tags + value)
@@ -274,6 +275,9 @@ get_status_code_name (StatusCode code)
 #define GET_FLAG_NONE           0x00
 #define GET_FLAG_IGNORE_EXPIRES 0x01
 
+#define SET_FLAG_NONE           0x00
+#define SET_FLAG_ONLY_TTL       0x01
+
 typedef struct __attribute__((packed))
 {
   s8 cik[3];
@@ -290,7 +294,8 @@ typedef struct __attribute__((packed))
     {
       u8  klen;
       u8  ntags;
-      u8  _padding[2];
+      u8  flags;
+      u8  _padding[1];
       u32 vlen;
       u32 ttl;
     } s;
@@ -328,8 +333,9 @@ typedef struct __attribute__((packed))
    && (sizeof (request.g._padding) == 10)       \
    && (sizeof (request.s.klen) == 1)            \
    && (sizeof (request.s.ntags) == 1)           \
+   && (sizeof (request.s.flags) == 1)           \
    && (sizeof (request.s.vlen) == 4)            \
-   && (sizeof (request.s._padding) == 2)        \
+   && (sizeof (request.s._padding) == 1)        \
    && (sizeof (request.d.klen) == 1)            \
    && (sizeof (request.d._padding) == 11)       \
    && (sizeof (request.c.mode) == 1)            \
@@ -347,7 +353,8 @@ typedef struct __attribute__((packed))
    && (offsetof (Request, g._padding) == 6)     \
    && (offsetof (Request, s.klen) == 4)         \
    && (offsetof (Request, s.ntags) == 5)        \
-   && (offsetof (Request, s._padding) == 6)     \
+   && (offsetof (Request, s.flags) == 6)        \
+   && (offsetof (Request, s._padding) == 7)     \
    && (offsetof (Request, s.vlen) == 8)         \
    && (offsetof (Request, d.klen) == 4)         \
    && (offsetof (Request, d._padding) == 5)     \
