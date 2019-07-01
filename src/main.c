@@ -59,7 +59,9 @@ main (int argc, char **argv)
   FILE *info_file = fopen  ("info.txt", "w");
   int   info_fd   = fileno (info_file);
 
-  int persistence_fd = open ("persistent.requestlog", O_RDWR | O_CREAT);
+  int persistence_fd = open ("persistent.requestlog",
+                             O_RDWR | O_CREAT,
+                             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
   if (persistence_fd < 0)
     {
       fprintf (stderr, "Could not open persistent.requestlog: %s\n",
