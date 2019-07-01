@@ -13,14 +13,14 @@
 #define TRY_LOCK_KEYS(t) \
   (!atomic_flag_test_and_set_explicit (&(t)->keys_lock, memory_order_acquire))
 
-#define LOCK_KEYS_AND_LOG_SPIN(t)                                         \
-  do {                                                                    \
-    if (!TRY_LOCK_KEYS (t))                                               \
-      {                                                                   \
-        err_print ("SPINNING \"%.*s\"\n", (t)->tag.nmemb, (t)->tag.base); \
-        LOCK_KEYS (t);                                                    \
-        err_print ("GOT LOCK \"%.*s\"\n", (t)->tag.nmemb, (t)->tag.base); \
-      }                                                                   \
+#define LOCK_KEYS_AND_LOG_SPIN(t)                                       \
+  do {                                                                  \
+    if (!TRY_LOCK_KEYS (t))                                             \
+      {                                                                 \
+        err_print ("SPINNING \"%s\"\n", tag2str ((t)->tag));            \
+        LOCK_KEYS (t);                                                  \
+        err_print ("GOT LOCK \"%s\"\n", tag2str ((t)->tag));            \
+      }                                                                 \
   } while (0)
 
 #define TAG_NODE_LEFT(t)  atomic_load (&(t)->left)

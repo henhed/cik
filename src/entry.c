@@ -3,12 +3,23 @@
 
 #include "entry.h"
 #include "print.h"
+#include "util.h"
 
 #define LOCK_SLOT(m, s) \
   do {} while (atomic_flag_test_and_set_explicit (&(map)->guards[s], \
                                                   memory_order_acquire))
 #define UNLOCK_SLOT(m, s) \
   atomic_flag_clear_explicit (&(m)->guards[s], memory_order_release)
+
+#define LOCK_ENTRY_AND_LOG_SPIN(e)                              \
+  do {                                                          \
+    if (!TRY_LOCK_ENTRY (e))                                    \
+      {                                                         \
+        err_print ("SPINNING \"%s\"\n", key2str ((e)->key));    \
+        LOCK_ENTRY (e);                                         \
+        err_print ("GOT LOCK \"%s\"\n", key2str ((e)->key));    \
+      }                                                         \
+  } while (0)
 
 static inline u32
 get_hash (const u8 *base, u32 nmemb)
@@ -67,16 +78,7 @@ lock_and_get_cache_entry (CacheEntryHashMap *map, CacheKey key)
         {
           if (map->hashes[pos] == hash)
             {
-              if (!TRY_LOCK_ENTRY (map->entries[pos]))
-                {
-                  err_print ("SPINNING \"%.*s\"\n",
-                             map->entries[pos]->key.nmemb,
-                             map->entries[pos]->key.base);
-                  LOCK_ENTRY (map->entries[pos]);
-                  err_print ("GOT LOCK \"%.*s\"\n",
-                             map->entries[pos]->key.nmemb,
-                             map->entries[pos]->key.base);
-                }
+              LOCK_ENTRY_AND_LOG_SPIN (map->entries[pos]);
               if (CMP_KEYS (map->entries[pos]->key, key))
                 {
                   UNLOCK_SLOT (map, pos);
@@ -114,16 +116,7 @@ lock_and_unset_cache_entry (CacheEntryHashMap *map, CacheKey key)
         {
           if (map->hashes[pos] == hash)
             {
-              if (!TRY_LOCK_ENTRY (map->entries[pos]))
-                {
-                  err_print ("SPINNING \"%.*s\"\n",
-                             map->entries[pos]->key.nmemb,
-                             map->entries[pos]->key.base);
-                  LOCK_ENTRY (map->entries[pos]);
-                  err_print ("GET LOCK \"%.*s\"\n",
-                             map->entries[pos]->key.nmemb,
-                             map->entries[pos]->key.base);
-                }
+              LOCK_ENTRY_AND_LOG_SPIN (map->entries[pos]);
               if (CMP_KEYS (map->entries[pos]->key, key))
                 {
                   CacheEntry *entry = map->entries[pos];
@@ -179,12 +172,7 @@ set_locked_cache_entry (CacheEntryHashMap *map, CacheEntry *entry,
                   return true;
                 }
 
-              if (!TRY_LOCK_ENTRY (occupant))
-                {
-                  err_print ("SPINNING \"%.*s\"\n", entry->key.nmemb, entry->key.base);
-                  LOCK_ENTRY (occupant);
-                  err_print ("GOT LOCK \"%.*s\"\n", entry->key.nmemb, entry->key.base);
-                }
+              LOCK_ENTRY_AND_LOG_SPIN (occupant);
               if (CMP_ENTRY_KEYS (occupant, entry))
                 {
                   cik_assert (*old_entry != entry);
@@ -244,12 +232,7 @@ walk_entries (CacheEntryHashMap *map, CacheEntryWalkCb callback,
           CacheEntry *entry = map->entries[pos];
           cik_assert (entry != NULL);
 
-          if (!TRY_LOCK_ENTRY (entry))
-            {
-              err_print ("SPINNING \"%.*s\"\n", entry->key.nmemb, entry->key.base);
-              LOCK_ENTRY (entry);
-              err_print ("GOT LOCK \"%.*s\"\n", entry->key.nmemb, entry->key.base);
-            }
+          LOCK_ENTRY_AND_LOG_SPIN (entry);
 
           if (callback (entry, user_data))
             {
