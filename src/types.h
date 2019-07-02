@@ -87,7 +87,7 @@ typedef struct
 } CacheEntryHashMap;
 
 typedef bool (*CacheEntryWalkCb) (CacheEntry *, void *);
-typedef bool (*CacheTagWalkCb)   (CacheTag,     void *);
+typedef void (*CacheTagWalkCb)   (CacheTag,     void *);
 
 typedef struct sockaddr    sockaddr_t;
 typedef struct sockaddr_in sockaddr_in_t;

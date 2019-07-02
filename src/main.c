@@ -128,8 +128,8 @@ write_entry_as_set_request_callback (CacheEntry *entry, int *fd)
   request.op            = CMD_BYTE_SET;
   request.s.klen        = entry->key.nmemb;
   request.s.ntags       = entry->tags.nmemb;
+  request.s.flags       = SET_FLAG_NONE;
   request.s._padding[0] = 0;
-  request.s._padding[1] = 0;
   request.s.vlen        = htonl (entry->value.nmemb);
   request.s.ttl         = htonl (0xFFFFFFFF);
 
@@ -142,13 +142,13 @@ write_entry_as_set_request_callback (CacheEntry *entry, int *fd)
     }
 
   write (*fd, &request, sizeof (request));
-  reverse_data (entry->key.base, entry->key.nmemb);
+  reverse_bytes (entry->key.base, entry->key.nmemb);
   write (*fd, entry->key.base, entry->key.nmemb);
   for (u8 t = 0; t < entry->tags.nmemb; ++t)
     {
       u8 tlen = entry->tags.base[t].nmemb;
       write (*fd, &tlen, sizeof (tlen));
-      reverse_data (entry->tags.base[t].base, tlen);
+      reverse_bytes (entry->tags.base[t].base, tlen);
       write (*fd, entry->tags.base[t].base, tlen);
     }
   write (*fd, entry->value.base, entry->value.nmemb);

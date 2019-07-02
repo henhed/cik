@@ -47,7 +47,7 @@ read_request_key (Client *client, CacheKey key)
   // Both keys and tags tend to be prefixed and so in general they have more
   // entropy at the end. Hence we store them in reverse byte order to improve
   // hash map distribution and early exit memcmp.
-  reverse_data (key.base, key.nmemb);
+  reverse_bytes (key.base, key.nmemb);
 
   return STATUS_OK;
 }
@@ -77,7 +77,7 @@ read_tags_using_payload_buffer (Client *client, CacheTag *tags, u8 ntags)
       buffer += tag->nmemb;
       buffer_cap -= tag->nmemb;
 
-      reverse_data (tag->base, tag->nmemb);
+      reverse_bytes (tag->base, tag->nmemb);
     }
 
   client->worker->payload_buffer.nmemb = (client->worker->payload_buffer.cap
@@ -483,6 +483,7 @@ list_all_keys_callback (CacheEntry *entry, struct _ListAllKeysCallbackData *data
 
   payload->base[payload->nmemb++] = key->nmemb;
   memcpy (&payload->base[payload->nmemb], key->base, key->nmemb);
+  reverse_bytes (&payload->base[payload->nmemb], key->nmemb);
   payload->nmemb += key->nmemb;
 
   return false;
@@ -524,25 +525,25 @@ struct _ListAllTagsCallbackData
   Payload   *payload;
 };
 
-static bool
+static void
 list_all_tags_callback (CacheTag tag, struct _ListAllTagsCallbackData *data)
 {
-  Payload  *payload = data->payload;
+  Payload *payload = data->payload;
 
   if (data->status != STATUS_OK)
-    return false;
+    return;
 
   if ((payload->nmemb + 1 + tag.nmemb) > payload->cap)
     {
       data->status = STATUS_OUT_OF_MEMORY;
-      return false;
+      return;
     }
 
   payload->base[payload->nmemb++] = tag.nmemb;
   memcpy (&payload->base[payload->nmemb], tag.base, tag.nmemb);
-  payload->nmemb += tag.nmemb;
+  reverse_bytes (&payload->base[payload->nmemb], tag.nmemb);
 
-  return false;
+  payload->nmemb += tag.nmemb;
 }
 
 static StatusCode
@@ -627,6 +628,7 @@ handle_lst_request (Client *client, Request *request, Payload **response_payload
 
             buffer->base[buffer->nmemb++] = key.nmemb;
             memcpy (&buffer->base[buffer->nmemb], key.base, key.nmemb);
+            reverse_bytes (&buffer->base[buffer->nmemb], key.nmemb);
             buffer->nmemb += key.nmemb;
           }
 

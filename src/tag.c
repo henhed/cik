@@ -64,7 +64,7 @@ create_tag_node (CacheTag tag)
 {
   TagNode *node;
   node = reserve_memory (sizeof (TagNode) + (sizeof (u8) * tag.nmemb));
-  cik_assert (node != NULL);
+  cik_assert (node != NULL); // @Incomplete: Bubble out-of-memory status
   *node = (TagNode) { 0 };
   node->tag.base = (u8 *) (node + 1);
   node->tag.nmemb = tag.nmemb;
@@ -261,37 +261,41 @@ remove_key_from_tag (CacheTag tag, CacheKey key)
 void
 walk_all_tags (CacheTagWalkCb callback, void *user_data)
 {
-  u32 stack_cap = 1024; // @Incomplete: This will not be enough
-  u32 stack_nmemb = 0;
-  TagNode *stack[stack_cap];
+  struct TagElem {
+    TagNode *node;
+    struct TagElem *next;
+  };
+
+  struct TagElem *stack = NULL;
   TagNode *current = &root;
 
   cik_assert (callback);
 
-  while ((current != NULL) || (stack_nmemb > 0))
+  while ((current != NULL) || (stack != NULL))
     {
+      struct TagElem *tmp;
+
       while (current != NULL)
         {
-          cik_assert (stack_nmemb < stack_cap);
-          stack[stack_nmemb++] = current;
+          tmp = reserve_memory (sizeof (struct TagElem));
+          cik_assert (tmp != NULL);
+          tmp->node = current;
+          tmp->next = stack;
+          stack = tmp;
           current = TAG_NODE_LEFT (current);
         }
 
-      cik_assert (stack_nmemb > 0);
-      current = stack[--stack_nmemb];
+      cik_assert (stack != NULL);
+      current = stack->node;
+      tmp = stack;
+      stack = tmp->next;
+      release_memory (tmp);
 
       LOCK_KEYS_AND_LOG_SPIN (current);
       bool has_keys = (current->keys != NULL);
       UNLOCK_KEYS (current);
       if (has_keys)
-        {
-          bool result = callback (current->tag, user_data);
-          (void) result;
-          // Return value ignored for now. `false' could mean `remove' like it
-          // does for entry walk but that would add a whole lot of complexity
-          // with regards to MT-safety. At the moment we never remove any tags
-          // or balance the tree.
-        }
+        callback (current->tag, user_data);
 
       current = TAG_NODE_RIGHT (current);
     }
@@ -388,39 +392,23 @@ get_keys_matching_all_tags (CacheTag *tags, u8 ntags)
   return found_keys;
 }
 
-#if 0 // Print tree
-static void
-debug_print_tag (int fd, TagNode *node, u32 depth)
-{
-  u32 nentries = 0;
-  dprintf (fd, "%*s'%.*s'",
-           depth * 2,
-           "* ",
-           node->tag.nmemb,
-           node->tag.base);
-  for (KeyElem **list = &node->keys; *list != NULL; list = &(*list)->next)
-    {
-      if (++nentries < 2)
-        dprintf (fd, " => '%.*s'",
-                 (*list)->key.nmemb,
-                 (*list)->key.base);
-    }
-  if (nentries > 2)
-    dprintf (fd, " (+ %u more)", nentries);
-  dprintf (fd, "\n");
-  if (node->left)
-    debug_print_tag (fd, node->left, depth + 1);
-  if (node->right)
-    debug_print_tag (fd, node->right, depth + 1);
-}
-#endif
-
 typedef struct
 {
   CacheTag tag;
   u32 tree_depth;
   u32 num_keys;
 } DebugTag;
+
+#define NUM_DEBUG_TAGS 10
+#define LAST_DEBUG_TAG (NUM_DEBUG_TAGS - 1)
+#define MAX_DEBUG_TAG_DEPTH 1024 // Recursion overflow protection
+
+typedef struct
+{
+  DebugTag tags[NUM_DEBUG_TAGS];
+  u32 total_num_tags;
+  u32 max_depth;
+} DebugSummary;
 
 static int
 cmp_debug_tag (const void *_a, const void *_b)
@@ -435,68 +423,56 @@ cmp_debug_tag (const void *_a, const void *_b)
 }
 
 void
-debug_print_tags (int fd)
+debug_find_popular_tags (TagNode *node, u32 depth, DebugSummary *summary)
 {
-  u32 debug_tag_cap   = 1024; // @Incomplete: This will not be enough
-  u32 debug_tag_nmemb = 0;
-  DebugTag debug_tags[debug_tag_cap];
+  u32 num_keys = 0;
 
-  u32 stack_cap = 1024; // @Incomplete: This will not be enough
-  u32 stack_nmemb = 0;
-  TagNode *stack[stack_cap];
-  TagNode *current = &root;
+  cik_assert (depth <= MAX_DEBUG_TAG_DEPTH);
+  if ((node == NULL) || (depth > MAX_DEBUG_TAG_DEPTH))
+    return;
 
-  while ((current != NULL) || (stack_nmemb > 0))
+  ++summary->total_num_tags;
+
+  if (depth > summary->max_depth)
+    summary->max_depth = depth;
+
+  LOCK_KEYS_AND_LOG_SPIN (node);
+  for (KeyElem **elem = &node->keys; *elem; elem = &(*elem)->next)
+    ++num_keys;
+  UNLOCK_KEYS (node);
+
+  if (summary->tags[LAST_DEBUG_TAG].num_keys < num_keys)
     {
-      while (current != NULL)
-        {
-          cik_assert (stack_nmemb < stack_cap);
-          stack[stack_nmemb++] = current;
-          current = TAG_NODE_LEFT (current);
-        }
-
-      cik_assert (stack_nmemb > 0);
-      current = stack[--stack_nmemb];
-
-      {
-        DebugTag *dt = NULL;
-        cik_assert (debug_tag_nmemb < debug_tag_cap);
-
-        dt = &debug_tags[debug_tag_nmemb++];
-
-        dt->tag        = current->tag;
-        dt->tree_depth = stack_nmemb;
-        dt->num_keys   = 0;
-
-        LOCK_KEYS_AND_LOG_SPIN (current);
-        for (KeyElem **elem = &current->keys; *elem; elem = &(*elem)->next)
-          ++dt->num_keys;
-        UNLOCK_KEYS (current);
-      }
-
-      current = TAG_NODE_RIGHT (current);
+      summary->tags[LAST_DEBUG_TAG].tag = node->tag;
+      summary->tags[LAST_DEBUG_TAG].tree_depth = depth;
+      summary->tags[LAST_DEBUG_TAG].num_keys = num_keys;
+      qsort (summary->tags, NUM_DEBUG_TAGS, sizeof (DebugTag), cmp_debug_tag);
     }
 
-  qsort (debug_tags, debug_tag_nmemb, sizeof (DebugTag), cmp_debug_tag);
+  debug_find_popular_tags (TAG_NODE_LEFT  (node), depth + 1, summary);
+  debug_find_popular_tags (TAG_NODE_RIGHT (node), depth + 1, summary);
+}
+
+void
+debug_print_tags (int fd)
+{
+  DebugSummary summary = { 0 };
+  debug_find_popular_tags (&root, 0, &summary);
 
   int count = 0;
-  count = dprintf (fd, "TAGS (%u) ", debug_tag_nmemb);
+  count = dprintf (fd, "TAGS (count: %u, depth: %u) ",
+                   summary.total_num_tags, summary.max_depth);
   dprintf (fd, "%.*s\n", LINEWIDTH - count, HLINESTR);
 
   dprintf (fd, "NAME %66s  %s\n", "KEYS", "DEPTH");
-  for (u32 i = 0; i < debug_tag_nmemb; ++i)
+  for (u32 i = 0; i < NUM_DEBUG_TAGS; ++i)
     {
-      DebugTag *dt = &debug_tags[i];
+      DebugTag *dt = &summary.tags[i];
+      if (dt->num_keys == 0)
+        break;
       dprintf (fd, "%-64s %6u %6u\n",
                tag2str (dt->tag), dt->num_keys, dt->tree_depth);
-
-      if (i == 9)
-        break; // Only print top 10
     }
 
   dprintf (fd, "\n");
-
-#if 0 // Print tree
-  debug_print_tag (fd, &root, 2);
-#endif
 }

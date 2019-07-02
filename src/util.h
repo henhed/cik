@@ -1,8 +1,10 @@
 #ifndef UTIL_H
 #define UTIL_H 1
 
+#include "types.h"
+
 static inline void
-reverse_data (u8 *base, u32 nmemb)
+reverse_bytes (u8 *base, u32 nmemb)
 {
   for (u8 *i = base, *j = base + (nmemb - 1); i < j; ++i, --j)
     {
