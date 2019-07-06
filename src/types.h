@@ -421,8 +421,10 @@ typedef struct __attribute__((packed))
   {
     struct __attribute__((packed))
     {
-      // @Incomplete: server info members
-      u8 _padding[16];
+      u32 bytes_reserved;
+      u32 bytes_used;
+      u32 bytes_free;
+      u32 bytes_reused;
     } server;
     struct __attribute__((packed))
     {

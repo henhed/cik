@@ -184,11 +184,6 @@ handle_set_request (Client *client, Request *request)
 
   log_request_set (client, key);
 
-  // @Revisit: Use key here and look if we have an existing entry
-  // in the hash table already. If so, reuse it's memory if possible.
-  // Right now we're always reserving new memory and releasing the old.
-  // But who knows, maybe reserving new memory will be faster in the end.
-
   if (flags & SET_FLAG_ONLY_TTL)
     {
       // Just renew expiry time for entry, ignore tags and value
@@ -268,14 +263,17 @@ handle_set_request (Client *client, Request *request)
 
   if (old_entry)
     {
-      // @Speed: Only remove keys missing in new entry
+      // @Speed: Maybe only remove keys missing in new entry
       for (u8 t = 0; t < old_entry->tags.nmemb; ++t)
         remove_key_from_tag (old_entry->tags.base[t], old_entry->key);
       UNLOCK_ENTRY (old_entry);
       release_memory (old_entry);
     }
 
-  // @Speed: Only add tags missing in old entry
+  // @Speed: Maybe only add tags missing in old entry.  In general we should
+  // only get SET requests when the client has just gotten a GET miss on the
+  // same key.  However, clients may race to set the same entry and then we
+  // might benefit from diffing old and new tags before updating.
   for (u8 t = 0; t < entry->tags.nmemb; ++t)
     add_key_to_tag (entry->tags.base[t], entry->key);
 
@@ -688,22 +686,23 @@ handle_nfo_request (Client *client, Request *request, Payload **response_payload
 
           *(tag_data++) = tag->nmemb;
           memcpy (tag_data, tag->base, tag->nmemb);
+          reverse_bytes (tag_data, tag->nmemb);
           tag_data += tag->nmemb;
           payload_buffer->nmemb += 1 + tag->nmemb;
         }
 
       UNLOCK_ENTRY (entry);
-      return STATUS_OK;
     }
   else
     {
-      // @Incomplete: Filling percentage etc.
-      dbg_print (RED ("NFO") "[%X]: Not implemented for empty tag\n",
-                 client->worker->id);
-      return STATUS_BUG;
+      populate_nfo_response (nfo);
+      nfo->server.bytes_reserved = htonl (nfo->server.bytes_reserved);
+      nfo->server.bytes_used     = htonl (nfo->server.bytes_used);
+      nfo->server.bytes_free     = htonl (nfo->server.bytes_free);
+      nfo->server.bytes_reused   = htonl (nfo->server.bytes_reused);
     }
 
-  return STATUS_BUG;
+  return STATUS_OK;
 }
 
 StatusCode

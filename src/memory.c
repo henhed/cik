@@ -78,20 +78,20 @@ init_memory ()
                        + total_hash_maps_size);
 
   // Try to allocate memory
-  dbg_print ("Reserving %lu bytes\n", MAX_TOTAL_MEMORY);
+  dbg_print ("Reserving %u bytes\n", MAX_TOTAL_MEMORY);
   main_memory = mmap ((void *) 0, MAX_TOTAL_MEMORY,
                       PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (main_memory == MAP_FAILED)
     {
-      err_print ("Failed to map %lu bytes: %s\n",
+      err_print ("Failed to map %u bytes: %s\n",
                  MAX_TOTAL_MEMORY, strerror (errno));
       return errno;
     }
 
-  dbg_print ("Committing %lu bytes\n", MAX_TOTAL_MEMORY);
+  dbg_print ("Committing %u bytes\n", MAX_TOTAL_MEMORY);
   if (0 != mprotect (main_memory, MAX_TOTAL_MEMORY, PROT_READ | PROT_WRITE))
     {
-      err_print ("Failed to commit %lu bytes: %s\n",
+      err_print ("Failed to commit %u bytes: %s\n",
                  MAX_TOTAL_MEMORY, strerror (errno));
       return errno;
     }
@@ -247,8 +247,30 @@ release_all_memory ()
 {
   if (0 != munmap (main_memory, MAX_TOTAL_MEMORY))
     {
-      err_print ("Failed to unmap %lu bytes: %s\n",
+      err_print ("Failed to unmap %u bytes: %s\n",
                  MAX_TOTAL_MEMORY, strerror (errno));
+    }
+}
+
+void
+populate_nfo_response (NFOResponsePayload *nfo)
+{
+  cik_assert (nfo != NULL);
+
+  nfo->server.bytes_reserved = MAX_TOTAL_MEMORY - total_system_size;
+  nfo->server.bytes_used     = 0;
+  nfo->server.bytes_free     = 0;
+  nfo->server.bytes_reused   = 0;
+
+  for (Partition **p = &partitions; *p; p = &(*p)->next)
+    {
+      Partition *partition = *p;
+      u32 num_used   = atomic_load (&partition->num_used);
+      u32 num_free   = atomic_load (&partition->num_free);
+      u32 num_reused = atomic_load (&partition->num_reused);
+      nfo->server.bytes_used   += partition->size * num_used;
+      nfo->server.bytes_free   += partition->size * num_free;
+      nfo->server.bytes_reused += partition->size * num_reused;
     }
 }
 
