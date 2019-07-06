@@ -22,7 +22,6 @@ static thrd_t logging_thread;
 
 static int run_logging_thread (void *);
 static void sigint_handler (int);
-static void test_hash_map (void);
 static bool write_entry_as_set_request_callback (CacheEntry *, int *);
 
 int
@@ -53,10 +52,10 @@ main (int argc, char **argv)
   for (u32 i = 0; i < NUM_CACHE_ENTRY_MAPS; ++i)
     init_cache_entry_map (entry_maps[i]);
 
-  printf ("Starting server on port %u\n", SERVER_PORT);
+  dbg_print ("Starting server on port %u\n", SERVER_PORT);
   if (0 != start_server ())
     {
-      fprintf (stderr, "Failed to start server: %s\n", strerror (errno));
+      err_print ("Failed to start server: %s\n", strerror (errno));
       return EXIT_FAILURE;
     }
 
@@ -68,16 +67,15 @@ main (int argc, char **argv)
                              S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
   if (persistence_fd < 0)
     {
-      fprintf (stderr, "Could not open persistent.requestlog: %s\n",
-               strerror (errno));
+      err_print ("Could not open persistent.requestlog: %s\n", strerror (errno));
       return EXIT_FAILURE;
     }
 
   ////////////////////////////////////////
   // ... Profit
-  test_hash_map (); // @Temporary
+
   if (0 > thrd_create (&logging_thread, run_logging_thread, NULL))
-    fprintf (stderr, "%s:%d: %s\n", __FUNCTION__, __LINE__, strerror (errno));
+    err_print ("%s\n", strerror (errno));
 
   load_request_log (persistence_fd);
 
@@ -96,12 +94,12 @@ main (int argc, char **argv)
   ////////////////////////////////////////
   // Clean up
 
-  printf ("\nShutting down ..\n");
+  dbg_print ("\nShutting down ..\n");
 
   stop_server ();
 
   if (0 > thrd_join (logging_thread, NULL))
-    fprintf (stderr, "%s:%d: %s\n", __FUNCTION__, __LINE__, strerror (errno));
+    err_print ("%s\n", strerror (errno));
 
   fclose (info_file);
 
@@ -180,81 +178,4 @@ write_entry_as_set_request_callback (CacheEntry *entry, int *fd)
   write (*fd, entry->value.base, entry->value.nmemb);
 
   return true;
-}
-
-static bool
-test_walk_entries (CacheEntry *entry, void *user_data)
-{
-  (void) user_data;
-  assert (entry);
-  fprintf (stderr, "%s: got called: %.*s\n", __FUNCTION__,
-           entry->key.nmemb, entry->key.base);
-  return true;
-}
-
-static void
-test_hash_map ()
-{
-  CacheKey   mykey0 = {(u8 *) "mykey0", strlen ("mykey0")};
-  CacheValue myval0 = {(u8 *) "myval0", strlen ("myval0")};
-  CacheKey   mykey1 = {(u8 *) "mykey1", strlen ("mykey1")};
-  CacheValue myval1 = {(u8 *) "myval1", strlen ("myval1")};
-
-  CacheEntry *entry0, *old_entry;
-  entry0 = reserve_and_lock_entry (mykey0.nmemb + myval0.nmemb);
-  entry0->key = mykey0; // !! Not pointing to reserved memory
-  entry0->value = myval0; // !! Not pointing to reserved memory
-  old_entry = NULL;
-  set_locked_cache_entry (entry_maps[0], entry0, &old_entry);
-  UNLOCK_ENTRY (entry0);
-  assert (old_entry == NULL);
-
-  CacheEntry *entry1;
-  entry1 = reserve_and_lock_entry (mykey0.nmemb + myval0.nmemb);
-  entry1->key = mykey0; // !! Not pointing to reserved memory
-  entry1->value = myval0; // !! Not pointing to reserved memory
-
-  old_entry = NULL;
-  set_locked_cache_entry (entry_maps[0], entry1, &old_entry);
-  UNLOCK_ENTRY (entry1);
-  assert (old_entry == entry0);
-  UNLOCK_ENTRY (old_entry);
-
-  old_entry = NULL;
-  LOCK_ENTRY (entry1);
-  set_locked_cache_entry (entry_maps[0], entry1, &old_entry);
-  UNLOCK_ENTRY (entry1);
-  assert (old_entry == NULL);
-
-  CacheEntry *entry2;
-  entry2 = reserve_and_lock_entry (mykey1.nmemb + myval1.nmemb);
-  entry2->key = mykey1; // !! Not pointing to reserved memory
-  entry2->value = myval1; // !! Not pointing to reserved memory
-  set_locked_cache_entry (entry_maps[0], entry2, &old_entry);
-  UNLOCK_ENTRY (entry2);
-
-  CacheEntry *entry3;
-  entry3 = lock_and_get_cache_entry (entry_maps[0], mykey1);
-  assert (entry3 == entry2);
-  assert (atomic_flag_test_and_set (&entry3->guard));
-  UNLOCK_ENTRY (entry3);
-  assert (!atomic_flag_test_and_set (&entry3->guard));
-  UNLOCK_ENTRY (entry3);
-  // Try to get same entry again to test internal slot locking
-  entry3 = lock_and_get_cache_entry (entry_maps[0], mykey1);
-  assert (entry3 != NULL);
-  UNLOCK_ENTRY (entry3);
-
-  CacheEntry *entry4;
-  CacheKey newkey = {(u8 *) "marklar", strlen ("marklar")};
-  entry4 = lock_and_get_cache_entry (entry_maps[0], newkey);
-  assert (entry4 == NULL);
-
-  CacheEntry *unset = lock_and_unset_cache_entry (entry_maps[0], mykey1);
-  assert (unset != NULL);
-  UNLOCK_ENTRY (unset);
-  unset = lock_and_unset_cache_entry (entry_maps[0], mykey1);
-  assert (unset == NULL);
-
-  walk_entries (entry_maps[0], test_walk_entries, NULL);
 }

@@ -255,19 +255,19 @@ debug_print_entry (CacheEntry *entry)
 {
 #if DEBUG
   bool expires = (entry->expires != CACHE_EXPIRES_INIT);
-  printf ("%s: Content is: {\n"
-          " TTL: %ld\n"
-          " MTIME: %ld\n"
-          " TAGS: %u\n"
-          " KEY: \"%.*s\"\n"
-          " VAL: \"%.*s\"\n}\n",
-          __FUNCTION__,
-          expires ? (entry->expires - time (NULL)) : -1,
-          entry->mtime,
-          entry->tags.nmemb,
-          entry->key.nmemb, entry->key.base,
-          entry->value.nmemb, entry->value.base
-          );
+  dbg_print ("%s: Content is: {\n"
+             " TTL: %ld\n"
+             " MTIME: %ld\n"
+             " TAGS: %u\n"
+             " KEY: \"%.*s\"\n"
+             " VAL: \"%.*s\"\n}\n",
+             __FUNCTION__,
+             expires ? (entry->expires - time (NULL)) : -1,
+             entry->mtime,
+             entry->tags.nmemb,
+             entry->key.nmemb, entry->key.base,
+             entry->value.nmemb, entry->value.base
+             );
 #else
   (void) entry;
 #endif
