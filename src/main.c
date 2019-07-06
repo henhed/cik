@@ -15,9 +15,12 @@
 #include "server.h"
 #include "profiler.h"
 #include "util.h"
+#include "log.h"
 
 volatile atomic_bool quit;
+static thrd_t logging_thread;
 
+static int run_logging_thread (void *);
 static void sigint_handler (int);
 static void test_hash_map (void);
 static bool write_entry_as_set_request_callback (CacheEntry *, int *);
@@ -35,6 +38,7 @@ main (int argc, char **argv)
     Response response;
     assert (IS_REQUEST_STRUCT_VALID  (request));
     assert (IS_RESPONSE_STRUCT_VALID (response));
+    assert ((NUM_LOG_QUEUE_ELEMS & (NUM_LOG_QUEUE_ELEMS - 1)) == 0);
   }
 
   ////////////////////////////////////////
@@ -72,6 +76,8 @@ main (int argc, char **argv)
   ////////////////////////////////////////
   // ... Profit
   test_hash_map (); // @Temporary
+  if (0 > thrd_create (&logging_thread, run_logging_thread, NULL))
+    fprintf (stderr, "%s:%d: %s\n", __FUNCTION__, __LINE__, strerror (errno));
 
   load_request_log (persistence_fd);
 
@@ -93,6 +99,10 @@ main (int argc, char **argv)
   printf ("\nShutting down ..\n");
 
   stop_server ();
+
+  if (0 > thrd_join (logging_thread, NULL))
+    fprintf (stderr, "%s:%d: %s\n", __FUNCTION__, __LINE__, strerror (errno));
+
   fclose (info_file);
 
   // Persist current state
@@ -109,6 +119,22 @@ main (int argc, char **argv)
   release_all_memory ();
 
   return EXIT_SUCCESS;
+}
+
+static int
+run_logging_thread (void *user_data)
+{
+  struct timespec delay = {.tv_sec = 0, .tv_nsec = 1000000}; // 1ms
+
+  (void) user_data;
+
+  while (!atomic_load (&quit))
+    {
+      flush_worker_logs ();
+      thrd_sleep (&delay, NULL);
+    }
+
+  return thrd_success;
 }
 
 static void

@@ -89,6 +89,37 @@ typedef struct
 typedef bool (*CacheEntryWalkCb) (CacheEntry *, void *);
 typedef void (*CacheTagWalkCb)   (CacheTag,     void *);
 
+typedef enum
+{
+  LOG_TYPE_REQUEST_GET_HIT = 0,
+  LOG_TYPE_REQUEST_GET_MISS,
+  LOG_TYPE_REQUEST_SET,
+  LOG_TYPE_REQUEST_DEL,
+  LOG_TYPE_REQUEST_CLR_ALL,
+  LOG_TYPE_REQUEST_CLR_OLD,
+  LOG_TYPE_REQUEST_CLR_MATCH_NONE,
+  LOG_TYPE_REQUEST_CLR_MATCH_ALL,
+  LOG_TYPE_REQUEST_CLR_MATCH_ANY,
+  NUM_LOG_TYPES
+} LogEntryType;
+
+typedef struct
+{
+  LogEntryType type;
+  u32 worker_id;
+  u32 client_ip;
+  u16 client_port;
+  u8 data[0x100];
+} LogEntry;
+
+typedef struct
+{
+  u32 mask;
+  _Atomic (u32) read;
+  _Atomic (u32) write;
+  LogEntry elems[NUM_LOG_QUEUE_ELEMS];
+} LogQueue;
+
 typedef struct sockaddr    sockaddr_t;
 typedef struct sockaddr_in sockaddr_in_t;
 typedef struct epoll_event epoll_event_t;
@@ -104,10 +135,11 @@ typedef struct
 
 typedef struct
 {
-  thrd_t  thread;
-  u32     id;
-  int     epfd;
-  Payload payload_buffer;
+  thrd_t    thread;
+  u32       id;
+  int       epfd;
+  Payload   payload_buffer;
+  LogQueue  log_queue;
   struct
   {
     u32 get;
@@ -143,6 +175,10 @@ typedef struct
     u32 lst;
     u32 nfo;
   } counters;
+  struct {
+    u64 last_request_start_tick;
+    u64 last_request_end_tick;
+  } timers;
 } Client;
 
 typedef enum

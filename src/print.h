@@ -5,10 +5,18 @@
 
 #include "config.h"
 
-#define BLUE(string)   "\e[0;34m" string "\e[0m"
-#define GREEN(string)  "\e[0;32m" string "\e[0m"
-#define RED(string)    "\e[1;31m" string "\e[0m"
-#define YELLOW(string) "\e[1;33m" string "\e[0m"
+#define BEGIN_BLUE     "\e[0;34m"
+#define BEGIN_GREEN    "\e[0;32m"
+#define BEGIN_RED      "\e[1;31m"
+#define BEGIN_YELLOW   "\e[1;33m"
+#define BEGIN_GRAY     "\e[38;5;244m"
+#define RESET_ANSI_FMT "\e[0m"
+
+#define BLUE(string)   BEGIN_BLUE   string RESET_ANSI_FMT
+#define GREEN(string)  BEGIN_GREEN  string RESET_ANSI_FMT
+#define RED(string)    BEGIN_RED    string RESET_ANSI_FMT
+#define YELLOW(string) BEGIN_YELLOW string RESET_ANSI_FMT
+#define GRAY(string)   BEGIN_GRAY   string RESET_ANSI_FMT
 
 #define LINEWIDTH 80
 #define HLINESTR "----------------------------------------" \

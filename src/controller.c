@@ -2,6 +2,7 @@
 
 #include "controller.h"
 #include "entry.h"
+#include "log.h"
 #include "memory.h"
 #include "print.h"
 #include "profiler.h"
@@ -16,6 +17,8 @@
 # define htonll(x) (((u64) htonl ((x) & 0xFFFFFFFF) << 32) | htonl ((x) >> 32))
 # define ntohll(x) (((u64) ntohl ((x) & 0xFFFFFFFF) << 32) | ntohl ((x) >> 32))
 #endif
+
+static thread_local Client *current_client = NULL;
 
 static inline CacheEntryHashMap *
 get_map_for_key (CacheKey key)
@@ -111,12 +114,12 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
   entry = lock_and_get_cache_entry (get_map_for_key (key), key);
   if (!entry)
     {
-      dbg_print (RED ("GET") "[%X]: '%s'\n", client->worker->id, key2str (key));
+      log_request_get_miss (client, key);
       ++client->counters.get_miss;
       return STATUS_NOT_FOUND;
     }
 
-  dbg_print (GREEN ("GET") "[%X]: '%s'\n", client->worker->id, key2str (key));
+  log_request_get_hit (client, key);
 
   if (~flags & GET_FLAG_IGNORE_EXPIRES)
     {
@@ -179,7 +182,7 @@ handle_set_request (Client *client, Request *request)
 
   ++client->counters.set;
 
-  dbg_print (BLUE ("SET") "[%X]: '%s'\n", client->worker->id, key2str (key));
+  log_request_set (client, key);
 
   // @Revisit: Use key here and look if we have an existing entry
   // in the hash table already. If so, reuse it's memory if possible.
@@ -286,7 +289,7 @@ delete_entry_by_key (CacheKey key)
 {
   CacheEntry *entry = NULL;
 
-  dbg_print (YELLOW ("DEL") ": '%s'\n", key2str (key));
+  log_request_del (current_client, key);
 
   // Unmap entry
   entry = lock_and_unset_cache_entry (get_map_for_key (key), key);
@@ -298,7 +301,7 @@ delete_entry_by_key (CacheKey key)
 
   do
     {
-      // Release memory. We loop untill we get NULL back from map. See note
+      // Release memory. We loop until we get NULL back from map. See note
       // about @Bug in `set_locked_cache_entry'.
       UNLOCK_ENTRY (entry);
       release_memory (entry);
@@ -337,7 +340,7 @@ clear_all_callback (CacheEntry *entry, void *user_data)
 
   cik_assert (entry);
 
-  dbg_print (YELLOW ("DEL") ": '%s'\n", key2str (entry->key));
+  log_request_del (current_client, entry->key);
 
   for (u8 t = 0; t < entry->tags.nmemb; ++t)
     remove_key_from_tag (entry->tags.base[t], entry->key);
@@ -410,25 +413,20 @@ handle_clr_request (Client *client, Request *request)
   switch (mode)
     {
     case CLEAR_MODE_ALL:
-      dbg_print (YELLOW ("CLR") "[%X]: (MATCH ALL)\n", client->worker->id);
+      log_request_clr_all (client);
       walk_all_entries (clear_all_callback, NULL);
       return STATUS_OK;
     case CLEAR_MODE_OLD:
       {
         time_t now = time (NULL);
-        dbg_print (YELLOW ("CLR") "[%X]: (MATCH OLD)\n", client->worker->id);
+        log_request_clr_old (client);
         walk_all_entries (clear_old_callback, &now);
         return STATUS_OK;
       }
     case CLEAR_MODE_MATCH_NONE:
       {
         CacheTagArray tag_array = { .base = tags, .nmemb = ntags };
-#if DEBUG
-        dbg_print (YELLOW ("CLR") "[%X]: (MATCH NONE)", client->worker->id);
-        for (u8 t = 0; t < ntags; ++t)
-          dbg_print (" '%s'", tag2str (tags[t]));
-        dbg_print ("\n");
-#endif
+        log_request_clr_match_none (client, tags, ntags);
         walk_all_entries (clear_non_matching_callback, &tag_array);
         return STATUS_OK;
       }
@@ -436,17 +434,16 @@ handle_clr_request (Client *client, Request *request)
     case CLEAR_MODE_MATCH_ANY:
       {
         KeyElem *keys = NULL;
-#if DEBUG
-        dbg_print (YELLOW ("CLR") "[%X]: (MATCH %s)", client->worker->id,
-                (mode == CLEAR_MODE_MATCH_ALL) ? "ALL" : "ANY");
-        for (u8 t = 0; t < ntags; ++t)
-          dbg_print (" '%s'", tag2str (tags[t]));
-        dbg_print ("\n");
-#endif
-        keys = (mode == CLEAR_MODE_MATCH_ALL)
-          ? get_keys_matching_all_tags (tags, ntags)
-          : get_keys_matching_any_tag  (tags, ntags);
-
+        if (mode == CLEAR_MODE_MATCH_ALL)
+          {
+            log_request_clr_match_all (client, tags, ntags);
+            keys = get_keys_matching_all_tags (tags, ntags);
+          }
+        else
+          {
+            log_request_clr_match_any (client, tags, ntags);
+            keys = get_keys_matching_any_tag  (tags, ntags);
+          }
         for (KeyElem **key = &keys; *key; key = &(*key)->next)
           delete_entry_by_key ((*key)->key);
         release_key_list (keys);
@@ -729,6 +726,8 @@ handle_request (Client *client, Request *request, Payload **response_payload)
       || (request->cik[1] != CONTROL_BYTE_2)
       || (request->cik[2] != CONTROL_BYTE_3))
     return STATUS_PROTOCOL_ERROR;
+
+  current_client = client;
 
   *response_payload = NULL;
 

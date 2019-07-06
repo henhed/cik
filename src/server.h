@@ -11,6 +11,7 @@ StatusCode read_request_payload   (Client *, u8 *, u32);
 StatusCode write_response         (Client *, Response *);
 StatusCode write_response_payload (Client *, u8 *, u32);
 void       close_client           (Client *);
+void       flush_worker_logs      (void);
 
 void load_request_log    (int);
 void debug_print_clients (int);

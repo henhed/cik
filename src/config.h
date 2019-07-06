@@ -31,5 +31,6 @@
 #define MAX_NUM_CLIENTS      0x100
 #define MAX_NUM_EVENTS       0x100
 #define WORKER_EPOLL_TIMEOUT 1000 // 1s
+#define NUM_LOG_QUEUE_ELEMS  0x100 // Must be power of 2
 
 #endif /* ! CONFIG_H */
