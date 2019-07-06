@@ -17,7 +17,6 @@
 
 static Server server = { 0 };
 static Client clients[MAX_NUM_CLIENTS] = {{ 0 }};
-static size_t num_clients = 0;
 static Worker workers[NUM_WORKERS] = {{ 0 }};
 
 static int run_worker        (Worker *);
@@ -30,7 +29,7 @@ start_server ()
   int enable_tcp_nodelay = 1;
 
   for (u32 i = 0; i < MAX_NUM_CLIENTS; ++i)
-    clients[i].fd = -1;
+    atomic_init (&clients[i].fd, -1);
 
   server.fd = socket (AF_INET, SOCK_STREAM, 0);
   if (server.fd < 0)
@@ -38,7 +37,7 @@ start_server ()
 
   if (0 > setsockopt (server.fd, IPPROTO_TCP, TCP_NODELAY, &enable_tcp_nodelay,
                       sizeof (enable_tcp_nodelay)))
-    fprintf (stderr, "Could not enable TCP_NODELAY: %s\n", strerror (errno));
+    err_print ("Could not enable TCP_NODELAY: %s\n", strerror (errno));
 
   server.addr.sin_family = AF_INET;
   server.addr.sin_addr.s_addr = INADDR_ANY;
@@ -82,8 +81,7 @@ start_server ()
       worker->log_queue = LOG_QUEUE_INIT;
       if (thrd_create (&worker->thread, (thrd_start_t) run_worker, worker) < 0)
         {
-          fprintf (stderr, "%s:%d: %s\n", __FUNCTION__, __LINE__,
-                   strerror (errno));
+          err_print ("%s\n", strerror (errno));
         }
     }
 
@@ -91,7 +89,7 @@ start_server ()
                    (thrd_start_t) run_accept_thread,
                    &server) < 0)
     {
-      fprintf (stderr, "%s:%d: %s\n", __FUNCTION__, __LINE__, strerror (errno));
+      err_print ("%s\n", strerror (errno));
     }
 
   return 0;
@@ -111,8 +109,7 @@ wait_for_new_connection (Server *server)
   nevents = epoll_wait (server->epfd, &event, 1, WORKER_EPOLL_TIMEOUT);
   if (nevents < 0)
     {
-      fprintf (stderr, "%s: epoll_wait failed: %s\n",
-               __FUNCTION__, strerror (errno));
+      err_print ("epoll_wait failed: %s\n", strerror (errno));
       return -nevents;
     }
   else if (nevents == 0)
@@ -121,30 +118,24 @@ wait_for_new_connection (Server *server)
     }
   else if (~event.events & EPOLLIN)
     {
-      fprintf (stderr, "%s: Unexpected epoll event: 0x%X\n",
-               __FUNCTION__, event.events);
+      err_print ("Unexpected epoll event: 0x%X\n", event.events);
       return 0;
     }
-#if DEBUG
-  assert (event.data.ptr == server); // Sanity check
-#endif
 
-  if (num_clients < MAX_NUM_CLIENTS)
-    client = &clients[num_clients++];
-  else
+  cik_assert (event.data.ptr == server); // Sanity check
+
+  for (u32 i = 0; i < MAX_NUM_CLIENTS; ++i)
     {
-      // @Incomplete: MT-safety!
-      for (u32 i = 0; i < MAX_NUM_CLIENTS; ++i)
+      if (atomic_load (&clients[i].fd) == -1)
         {
-          int fd = clients[i].fd;
-          if (fd == -1)
-            client = &clients[i];
+          client = &clients[i];
+          break;
         }
     }
 
   if (client == NULL)
     {
-      fprintf (stderr, "%s: We're full\n", __FUNCTION__);
+      err_print ("Can't accept new connection (max: %u)\n", MAX_NUM_CLIENTS);
       return EAGAIN;
     }
 
@@ -176,8 +167,13 @@ wait_for_new_connection (Server *server)
 static int
 run_accept_thread (Server *server)
 {
+  struct timespec cooldown = {.tv_sec = 0, .tv_nsec = 100000000}; // 100ms
+
   while (atomic_load (&server->is_running))
-    wait_for_new_connection (server);
+    {
+      if (0 != wait_for_new_connection (server))
+        thrd_sleep (&cooldown, NULL);
+    }
 
   return thrd_success;
 }
@@ -192,7 +188,7 @@ load_request_log (int fd)
   Request    request;
   StatusCode status;
 
-  client.fd = fd;
+  atomic_init (&client.fd, fd);
   client.worker = &worker;
   worker.id = (u32) -1;
   reserve_biggest_possible_payload (&worker.payload_buffer);
@@ -202,11 +198,8 @@ load_request_log (int fd)
     {
       Payload *ignored = NULL;
       status = handle_request (&client, &request, &ignored);
-#if DEBUG
-      assert (status == STATUS_OK);
-#else
-      (void) status;
-#endif
+      cik_assert (status == STATUS_OK);
+      (void) status; // #if ! DEBUG
     }
 
   release_memory (worker.payload_buffer.base);
@@ -222,8 +215,7 @@ process_worker_events (Worker *worker)
                             MAX_NUM_EVENTS, WORKER_EPOLL_TIMEOUT);
   if (nevents < 0)
     {
-      fprintf (stderr, "%s: epoll_wait failed: %s\n",
-               __FUNCTION__, strerror (errno));
+      err_print ("epoll_wait failed: %s\n", strerror (errno));
       return nevents;
     }
 
@@ -235,10 +227,7 @@ process_worker_events (Worker *worker)
         {
           Client *client = event->data.ptr;
           close_client (client);
-#if DEBUG
-          fprintf (stderr, "%s: Got error event: 0x%X\n",
-                   __FUNCTION__, event->events);
-#endif
+          err_print ("Got error event: 0x%X\n", event->events);
           continue;
         }
 
@@ -258,9 +247,8 @@ process_worker_events (Worker *worker)
             {
               if (status != STATUS_CONNECTION_CLOSED)
                 {
-                  fprintf (stderr, "%s:%d (FD %d) %s [%s]\n", __FUNCTION__, __LINE__,
-                           client->fd, get_status_code_name (status),
-                           strerror (errno));
+                  err_print ("(FD %d) %s [%s]\n", client->fd,
+                             get_status_code_name (status), strerror (errno));
                 }
               close_client (client);
               continue;
@@ -270,8 +258,8 @@ process_worker_events (Worker *worker)
           status = handle_request (client, &request, &payload);
           if (status & MASK_INTERNAL_ERROR)
             {
-              fprintf (stderr, "%s:%d (FD %d) %s [%s]\n", __FUNCTION__, __LINE__,
-                       client->fd, get_status_code_name (status), strerror (errno));
+              err_print ("(FD %d) %s [%s]\n", client->fd,
+                         get_status_code_name (status), strerror (errno));
               close_client (client);
               continue;
             }
@@ -290,8 +278,8 @@ process_worker_events (Worker *worker)
           status = write_response (client, &response);
           if (status & MASK_INTERNAL_ERROR)
             {
-              fprintf (stderr, "%s:%d (FD %d) %s [%s]\n", __FUNCTION__, __LINE__,
-                       client->fd, get_status_code_name (status), strerror (errno));
+              err_print ("(FD %d) %s [%s]\n", client->fd,
+                         get_status_code_name (status), strerror (errno));
               close_client (client);
               continue;
             }
@@ -301,8 +289,8 @@ process_worker_events (Worker *worker)
               status = write_response_payload (client, payload->base, payload->nmemb);
               if (status & MASK_INTERNAL_ERROR)
                 {
-                  fprintf (stderr, "%s:%d (FD %d) %s [%s]\n", __FUNCTION__, __LINE__,
-                           client->fd, get_status_code_name (status), strerror (errno));
+                  err_print ("(FD %d) %s [%s]\n", client->fd,
+                             get_status_code_name (status), strerror (errno));
                   close_client (client);
                   continue;
                 }
@@ -321,7 +309,7 @@ run_worker (Worker *worker)
   worker->epfd = epoll_create (MAX_NUM_CLIENTS); // Size is actually ignored here
   if (worker->epfd < 0)
     {
-      fprintf (stderr, "%s:%d: %s\n", __FUNCTION__, __LINE__, strerror (errno));
+      err_print ("%s\n", strerror (errno));
       return thrd_error;
     }
 
@@ -341,13 +329,12 @@ stop_server ()
   atomic_store (&server.is_running, false);
 
   if (0 > thrd_join (server.accept_thread, NULL))
-    fprintf (stderr, "%s:%d: %s\n", __FUNCTION__, __LINE__, strerror (errno));
+    err_print ("%s\n", strerror (errno));
 
   for (u32 w = 0; w < NUM_WORKERS; ++w)
     {
       if (0 > thrd_join (workers[w].thread, NULL))
-        fprintf (stderr, "%s:%d: %s\n", __FUNCTION__, __LINE__,
-                 strerror (errno));
+        err_print ("%s\n", strerror (errno));
     }
 
   for (u32 i = 0; i < MAX_NUM_CLIENTS; ++i)
@@ -366,10 +353,9 @@ StatusCode
 read_request_payload (Client *client, u8 *base, u32 nmemb)
 {
   ssize_t nread = 0, remaining_size = nmemb;
-#if DEBUG
-  assert (client);
-  assert (base);
-#endif
+
+  cik_assert (client);
+  cik_assert (base);
 
   if (nmemb == 0)
     return STATUS_OK;
@@ -399,10 +385,9 @@ StatusCode
 write_response_payload (Client *client, u8 *base, u32 nmemb)
 {
   ssize_t nsent = 0, remaining_size = nmemb;
-#if DEBUG
-  assert (client);
-  assert (base);
-#endif
+
+  cik_assert (client);
+  cik_assert (base);
 
   if (nmemb == 0)
     return STATUS_OK;
@@ -430,7 +415,7 @@ close_client (Client *client)
   if (!client || (client->fd < 0))
     return;
   close (client->fd);
-  client->fd = -1;
+  atomic_store (&client->fd, -1);
   client->worker = NULL;
 }
 

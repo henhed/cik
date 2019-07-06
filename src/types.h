@@ -162,7 +162,7 @@ typedef struct
 
 typedef struct
 {
-  int           fd;
+  atomic_int    fd;
   sockaddr_in_t addr;
   socklen_t     addrlen;
   Worker       *worker;
