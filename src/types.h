@@ -100,6 +100,7 @@ typedef enum
   LOG_TYPE_REQUEST_CLR_MATCH_NONE,
   LOG_TYPE_REQUEST_CLR_MATCH_ALL,
   LOG_TYPE_REQUEST_CLR_MATCH_ANY,
+  LOG_TYPE_STRING,
   NUM_LOG_TYPES
 } LogEntryType;
 
@@ -123,6 +124,13 @@ typedef struct
 typedef struct sockaddr    sockaddr_t;
 typedef struct sockaddr_in sockaddr_in_t;
 typedef struct epoll_event epoll_event_t;
+
+struct _RuntimeConfig
+{
+  in_addr_t listen_address;
+  in_port_t listen_port;
+  const char *log_filename;
+};
 
 typedef struct
 {

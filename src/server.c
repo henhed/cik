@@ -4,16 +4,11 @@
 #include <sys/epoll.h>
 #include <unistd.h>
 
-#if DEBUG
-# include <assert.h>
-#endif
-
-#include "server.h"
 #include "controller.h"
-#include "memory.h"
-#include "print.h"
-#include "profiler.h"
 #include "log.h"
+#include "memory.h"
+#include "profiler.h"
+#include "server.h"
 
 static Server server = { 0 };
 static Client clients[MAX_NUM_CLIENTS] = {{ 0 }};
@@ -23,7 +18,7 @@ static int run_worker        (Worker *);
 static int run_accept_thread (Server *);
 
 int
-start_server ()
+start_server (in_addr_t listen_address, in_port_t listen_port)
 {
   epoll_event_t event = { 0 };
   int enable_tcp_nodelay = 1;
@@ -40,8 +35,8 @@ start_server ()
     err_print ("Could not enable TCP_NODELAY: %s\n", strerror (errno));
 
   server.addr.sin_family = AF_INET;
-  server.addr.sin_addr.s_addr = INADDR_ANY;
-  server.addr.sin_port = htons (SERVER_PORT);
+  server.addr.sin_addr.s_addr = listen_address;
+  server.addr.sin_port = htons (listen_port);
 
   if (0 > bind (server.fd, (sockaddr_t *) &server.addr, sizeof (server.addr)))
     {
@@ -420,7 +415,7 @@ close_client (Client *client)
 }
 
 void
-flush_worker_logs ()
+flush_worker_logs (int fd)
 {
   for (u32 id = 0; id < NUM_WORKERS; ++id)
     {
@@ -428,7 +423,7 @@ flush_worker_logs ()
       LogEntry entry;
       while (dequeue_log_entry (&worker->log_queue, &entry))
         {
-          print_log_entry (&entry);
+          print_log_entry (&entry, fd);
           thrd_yield ();
         }
     }

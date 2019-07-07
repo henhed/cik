@@ -20,15 +20,16 @@
 volatile atomic_bool quit;
 static thrd_t logging_thread;
 
-static int run_logging_thread (void *);
+static int run_logging_thread (const char *);
 static void sigint_handler (int);
 static bool write_entry_as_set_request_callback (CacheEntry *, int *);
 
 int
 main (int argc, char **argv)
 {
-  (void) argc;
-  (void) argv;
+  RuntimeConfig *config = parse_args (argc, argv);
+  if (config == NULL)
+    return EXIT_FAILURE;
 
   ////////////////////////////////////////
   // Sanity checks
@@ -45,6 +46,8 @@ main (int argc, char **argv)
 
   // Try to cleanly exit given SIGINT
   signal (SIGINT, sigint_handler);
+  // Ignore broken pipe so logger can write to fifo w/o listeners
+  signal (SIGPIPE, SIG_IGN);
 
   if (0 > init_memory ())
     return EXIT_FAILURE;
@@ -52,8 +55,13 @@ main (int argc, char **argv)
   for (u32 i = 0; i < NUM_CACHE_ENTRY_MAPS; ++i)
     init_cache_entry_map (entry_maps[i]);
 
-  dbg_print ("Starting server on port %u\n", SERVER_PORT);
-  if (0 != start_server ())
+  dbg_print ("Starting server on %d.%d.%d.%d:%d\n",
+             (config->listen_address & 0x000000FF) >>  0,
+             (config->listen_address & 0x0000FF00) >>  8,
+             (config->listen_address & 0x00FF0000) >> 16,
+             (config->listen_address & 0xFF000000) >> 24,
+             config->listen_port);
+  if (0 != start_server (config->listen_address, config->listen_port))
     {
       err_print ("Failed to start server: %s\n", strerror (errno));
       return EXIT_FAILURE;
@@ -74,7 +82,8 @@ main (int argc, char **argv)
   ////////////////////////////////////////
   // ... Profit
 
-  if (0 > thrd_create (&logging_thread, run_logging_thread, NULL))
+  if (0 > thrd_create (&logging_thread, (thrd_start_t) run_logging_thread,
+                       (void *) config->log_filename))
     err_print ("%s\n", strerror (errno));
 
   load_request_log (persistence_fd);
@@ -120,17 +129,29 @@ main (int argc, char **argv)
 }
 
 static int
-run_logging_thread (void *user_data)
+run_logging_thread (const char *logfile)
 {
   struct timespec delay = {.tv_sec = 0, .tv_nsec = 1000000}; // 1ms
+  int rd_fd = open (logfile, O_RDONLY | O_NONBLOCK);
+  int wr_fd = open (logfile, O_WRONLY | O_NONBLOCK);
 
-  (void) user_data;
+  if (wr_fd == -1)
+    {
+      wrn_print ("Could not open %s: %s\n", logfile, strerror (errno));
+      return thrd_error;
+    }
+
+  // We don't actually care about `rd_fd' but we need to have it opened to be
+  // able to open a FIFO for writing in non-blocking mode.
+  close (rd_fd);
 
   while (!atomic_load (&quit))
     {
-      flush_worker_logs ();
+      flush_worker_logs (wr_fd);
       thrd_sleep (&delay, NULL);
     }
+
+  close (wr_fd);
 
   return thrd_success;
 }

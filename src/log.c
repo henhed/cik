@@ -2,6 +2,8 @@
 
 #include "log.h"
 
+thread_local LogQueue *current_log_queue = NULL;
+
 static char *verbs[NUM_LOG_TYPES] = {
   [LOG_TYPE_REQUEST_GET_HIT]          = GREEN  ("GET"),
   [LOG_TYPE_REQUEST_GET_MISS]         = RED    ("GET"),
@@ -55,6 +57,7 @@ log_request_with_no_args (LogEntryType type, Client *client)
     .client_ip   = client->addr.sin_addr.s_addr,
     .client_port = client->addr.sin_port
   };
+  cik_assert (&client->worker->log_queue == current_log_queue);
   return enqueue_log_entry (&client->worker->log_queue, &entry);
 }
 
@@ -69,6 +72,7 @@ log_request_with_key (LogEntryType type, Client *client, CacheKey key)
     .data        = { [0] = key.nmemb }
   };
   memcpy (&entry.data[1], key.base, key.nmemb);
+  cik_assert (&client->worker->log_queue == current_log_queue);
   return enqueue_log_entry (&client->worker->log_queue, &entry);
 }
 
@@ -92,6 +96,7 @@ log_request_with_tags (LogEntryType type, Client *client,
       memcpy (&entry.data[nmemb], tags[t].base, tags[t].nmemb);
       nmemb += tags[t].nmemb;
     }
+  cik_assert (&client->worker->log_queue == current_log_queue);
   return enqueue_log_entry (&client->worker->log_queue, &entry);
 }
 
@@ -153,20 +158,28 @@ log_request_clr_match_any (Client *client, CacheTag *tags, u8 ntags)
 }
 
 void
-print_log_entry (LogEntry *e)
+print_log_entry (LogEntry *e, int fd)
 {
-#if DEBUG
+  int count = 0;
+
   cik_assert (e != NULL);
   cik_assert ((e->type >= 0) && (e->type < NUM_LOG_TYPES));
 
-  dbg_print (GRAY ("%u.%u.%u.%u:%u[%X]") " %s ",
-             (e->client_ip & 0x000000FF) >>  0,
-             (e->client_ip & 0x0000FF00) >>  8,
-             (e->client_ip & 0x00FF0000) >> 16,
-             (e->client_ip & 0xFF000000) >> 24,
-             e->client_port,
-             e->worker_id,
-             verbs [e->type]);
+  if (e->type < LOG_TYPE_STRING) // Request types
+    {
+      dprintf (fd, BEGIN_GRAY);
+      count += dprintf (fd, "[%X] ", e->worker_id);
+      count += dprintf (fd, "%u.%u.%u.%u:%u",
+                        (e->client_ip & 0x000000FF) >>  0,
+                        (e->client_ip & 0x0000FF00) >>  8,
+                        (e->client_ip & 0x00FF0000) >> 16,
+                        (e->client_ip & 0xFF000000) >> 24,
+                        e->client_port);
+      dprintf (fd, RESET_ANSI_FMT);
+
+      dprintf (fd, "%.*s", 26 - count, BLANKSTR);
+      dprintf (fd, " %s ", verbs [e->type]);
+    }
 
   switch (e->type)
     {
@@ -176,21 +189,21 @@ print_log_entry (LogEntry *e)
     case LOG_TYPE_REQUEST_DEL:
       {
         CacheKey key = { .base = &e->data[1], .nmemb = e->data[0] };
-        dbg_print ("'%s'", key2str (key));
+        dprintf (fd, "'%s'", key2str (key));
         break;
       }
     case LOG_TYPE_REQUEST_CLR_ALL:
-      dbg_print ("(ALL)");
+      dprintf (fd, "(ALL)");
       break;
     case LOG_TYPE_REQUEST_CLR_OLD:
-      dbg_print ("(OLD)");
+      dprintf (fd, "(OLD)");
       break;
     case LOG_TYPE_REQUEST_CLR_MATCH_NONE:
     case LOG_TYPE_REQUEST_CLR_MATCH_ALL:
     case LOG_TYPE_REQUEST_CLR_MATCH_ANY:
       {
         CacheTag tag = { .base = &e->data[1], .nmemb = e->data[0] };
-        dbg_print ("(MATCH %s)",
+        dprintf (fd, "(MATCH %s)",
                    ((e->type == LOG_TYPE_REQUEST_CLR_MATCH_NONE)
                     ? "NONE"
                     : ((e->type == LOG_TYPE_REQUEST_CLR_MATCH_ALL)
@@ -198,20 +211,19 @@ print_log_entry (LogEntry *e)
                        : "ANY")));
         while (tag.nmemb > 0)
           {
-            dbg_print (" '%s'", tag2str (tag));
+            dprintf (fd, " '%s'", tag2str (tag));
             tag.base += tag.nmemb;
             tag.nmemb = *tag.base;
             ++tag.base;
           }
         break;
       }
+    case LOG_TYPE_STRING:
+      dprintf (fd, "%s", e->data);
+      break;
     default:
       break; // NoOp
     }
 
-  dbg_print ("\n");
-#else
-  (void) e;
-  (void) verbs;
-#endif
+  dprintf (fd, "\n");
 }

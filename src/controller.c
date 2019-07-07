@@ -4,7 +4,6 @@
 #include "entry.h"
 #include "log.h"
 #include "memory.h"
-#include "print.h"
 #include "profiler.h"
 #include "server.h"
 #include "tag.h"
@@ -727,6 +726,7 @@ handle_request (Client *client, Request *request, Payload **response_payload)
     return STATUS_PROTOCOL_ERROR;
 
   current_client = client;
+  current_log_queue = &worker->log_queue;
 
   *response_payload = NULL;
 

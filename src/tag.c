@@ -1,9 +1,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "tag.h"
+#include "log.h"
 #include "memory.h"
-#include "print.h"
+#include "tag.h"
 #include "util.h"
 
 #define LOCK_KEYS(t) \

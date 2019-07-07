@@ -21,12 +21,15 @@
 #define NUM_CACHE_ENTRY_MAPS 6421 // Should be a prime
 #define CACHE_ENTRY_MAP_SIZE 797  // Should be a prime
 
-#define SERVER_PORT          5555
 #define SERVER_BACKLOG       0x100
 #define NUM_WORKERS          0x10
 #define MAX_NUM_CLIENTS      0x100
 #define MAX_NUM_EVENTS       0x100
 #define WORKER_EPOLL_TIMEOUT 1000 // 1s
 #define NUM_LOG_QUEUE_ELEMS  0x100 // Must be power of 2
+
+typedef struct _RuntimeConfig RuntimeConfig; // Defined in types.h
+
+RuntimeConfig *parse_args (int, char **);
 
 #endif /* ! CONFIG_H */

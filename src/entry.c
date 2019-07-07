@@ -2,7 +2,7 @@
 #include <string.h>
 
 #include "entry.h"
-#include "print.h"
+#include "log.h"
 #include "util.h"
 
 #define LOCK_SLOT(m, s) \

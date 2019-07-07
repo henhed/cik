@@ -10,7 +10,7 @@
 
 #include "memory.h"
 #include "entry.h"
-#include "print.h"
+#include "log.h"
 
 #define PADDING(s)                                         \
   ((alignof (max_align_t) - ((s) % alignof (max_align_t))) \
