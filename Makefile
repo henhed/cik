@@ -43,7 +43,7 @@ all: $(BIN_PATH)/$(BIN_NAME)
 
 .PHONY: run
 run: release
-	@./$(BIN_NAME)
+	@./$(BIN_NAME) cik.conf
 
 $(BIN_PATH)/$(BIN_NAME): $(OBJECTS)
 	@echo "Linking: $@"
