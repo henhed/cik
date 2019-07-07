@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/file.h>
 #include <threads.h>
 #include <unistd.h>
 
@@ -28,6 +29,8 @@ int
 main (int argc, char **argv)
 {
   RuntimeConfig *config = parse_args (argc, argv);
+  int persistence_fd;
+
   if (config == NULL)
     return EXIT_FAILURE;
 
@@ -56,26 +59,33 @@ main (int argc, char **argv)
     init_cache_entry_map (entry_maps[i]);
 
   dbg_print ("Starting server on %d.%d.%d.%d:%d\n",
-             (config->listen_address & 0x000000FF) >>  0,
-             (config->listen_address & 0x0000FF00) >>  8,
-             (config->listen_address & 0x00FF0000) >> 16,
-             (config->listen_address & 0xFF000000) >> 24,
-             config->listen_port);
+             (ntohl (config->listen_address) & 0xFF000000) >> 24,
+             (ntohl (config->listen_address) & 0x00FF0000) >> 16,
+             (ntohl (config->listen_address) & 0x0000FF00) >>  8,
+             (ntohl (config->listen_address) & 0x000000FF) >>  0,
+             ntohs (config->listen_port));
   if (0 != start_server (config->listen_address, config->listen_port))
     {
       err_print ("Failed to start server: %s\n", strerror (errno));
       return EXIT_FAILURE;
     }
 
-  FILE *info_file = fopen  ("info.txt", "w");
+  FILE *info_file = fopen  ("info.txt", "w"); // @Incomplete: Scrap or improve
   int   info_fd   = fileno (info_file);
 
-  int persistence_fd = open ("persistent.requestlog",
-                             O_RDWR | O_CREAT,
-                             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+  persistence_fd = open (config->persistence_filename,
+                         O_RDWR | O_CREAT,
+                         S_IRUSR | S_IWUSR | S_IRGRP);
   if (persistence_fd < 0)
     {
-      err_print ("Could not open persistent.requestlog: %s\n", strerror (errno));
+      err_print ("Could not open %s: %s\n", config->persistence_filename,
+                 strerror (errno));
+      return EXIT_FAILURE;
+    }
+  if (flock (persistence_fd, LOCK_EX | LOCK_NB) < 0)
+    {
+      err_print ("Could not lock %s: %s\n", config->persistence_filename,
+                 strerror (errno));
       return EXIT_FAILURE;
     }
 
@@ -121,6 +131,7 @@ main (int argc, char **argv)
                     (CacheEntryWalkCb) write_entry_as_set_request_callback,
                     &persistence_fd);
     }
+  flock (persistence_fd, LOCK_UN);
   close (persistence_fd);
 
   release_all_memory ();

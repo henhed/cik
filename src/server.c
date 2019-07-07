@@ -36,7 +36,7 @@ start_server (in_addr_t listen_address, in_port_t listen_port)
 
   server.addr.sin_family = AF_INET;
   server.addr.sin_addr.s_addr = listen_address;
-  server.addr.sin_port = htons (listen_port);
+  server.addr.sin_port = listen_port;
 
   if (0 > bind (server.fd, (sockaddr_t *) &server.addr, sizeof (server.addr)))
     {

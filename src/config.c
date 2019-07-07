@@ -10,14 +10,16 @@
 #include "types.h"
 
 char log_filename[0x400] = "/tmp/cik-server.log";
+char persistence_filename[0x400] = "/tmp/cik-server.persistent-data";
 
 static RuntimeConfig runtime_config = {
-  .listen_address = INADDR_ANY,
-  .listen_port    = 5555,
-  .log_filename   = log_filename
+  .listen_address       = INADDR_ANY,
+  .listen_port          = (0x32 << 8) | 0x4F, // 20274 big endian
+  .log_filename         = log_filename,
+  .persistence_filename = persistence_filename
 };
 
-void parse_variable (const char *, int, const char *, char *);
+bool parse_variable (const char *, int, const char *, char *);
 
 RuntimeConfig *
 parse_args (int argc, char **argv)
@@ -92,13 +94,14 @@ parse_args (int argc, char **argv)
         --c;
       *c = '\0';
 
-      parse_variable (filename, lineno, name, value);
+      if (!parse_variable (filename, lineno, name, value))
+        return NULL;
     }
 
   return &runtime_config;
 }
 
-void
+bool
 parse_variable (const char *filename, int lineno, const char *name, char *value)
 {
   if (0 == strcmp(name, "listen_address"))
@@ -116,8 +119,9 @@ parse_variable (const char *filename, int lineno, const char *name, char *value)
       err = getaddrinfo (value, NULL, &hints, &result);
       if (err != 0)
         {
-          err_print ("Failed to parse address: %s\n", gai_strerror (err));
-          return;
+          err_print ("Failed to parse address '%s': %s\n", value,
+                     gai_strerror (err));
+          return false;
         }
 
       found = false;
@@ -139,7 +143,7 @@ parse_variable (const char *filename, int lineno, const char *name, char *value)
       if (!found)
         {
           err_print ("Failed to lookup address: %s\n", gai_strerror (err));
-          return;
+          return false;
         }
     }
   else if (0 == strcmp(name, "listen_port"))
@@ -150,26 +154,34 @@ parse_variable (const char *filename, int lineno, const char *name, char *value)
         {
           err_print ("Could not parse port number in %s on line %d\n",
                      filename, lineno);
-          return;
+          return false;
         }
 
       if (port < 0 || port > 0xFFFF)
         {
           err_print ("Port number %ld out of range in %s on line %d\n",
                      port, filename, lineno);
-          return;
+          return false;
         }
 
-      runtime_config.listen_port = port;
+      runtime_config.listen_port = htons (port);
     }
   else if (0 == strcmp(name, "log_filename"))
     {
       strncpy (log_filename, value, sizeof (log_filename));
       log_filename[sizeof (log_filename) - 1] = '\0';
     }
+  else if (0 == strcmp(name, "persistence_filename"))
+    {
+      strncpy (persistence_filename, value, sizeof (persistence_filename));
+      persistence_filename[sizeof (persistence_filename) - 1] = '\0';
+    }
   else
     {
       err_print ("Unknown variable '%s' in %s on line %d\n",
                  name, filename, lineno);
+      return false;
     }
+
+  return true;
 }
