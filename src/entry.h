@@ -15,6 +15,7 @@
   .value   = CACHE_VALUE_INIT,          \
   .expires = CACHE_EXPIRES_INIT,        \
   .mtime   = CACHE_MTIME_INIT,          \
+  .nhits   = 0,                         \
   .guard   = ATOMIC_FLAG_INIT           \
 }
 
@@ -32,6 +33,7 @@ bool        set_locked_cache_entry      (CacheEntryHashMap *, CacheEntry *,
                                          CacheEntry **);
 void        walk_entries                (CacheEntryHashMap *, CacheEntryWalkCb,
                                          void *);
+void        write_entry_stats           (int, CacheEntryHashMap **, u32);
 void        debug_print_entry           (CacheEntry *);
 
 #endif /* ! ENTRY_H */

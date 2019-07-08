@@ -75,6 +75,7 @@ typedef struct
   CacheValue value;
   time_t mtime;
   time_t expires;
+  u32 nhits;
   atomic_flag guard;
 } CacheEntry;
 
@@ -131,6 +132,11 @@ struct _RuntimeConfig
   in_port_t listen_port;
   const char *log_filename;
   const char *persistence_filename;
+  const char *entry_stats_filename;
+  const char *tag_stats_filename;
+  const char *memory_stats_filename;
+  const char *client_stats_filename;
+  const char *worker_stats_filename;
 };
 
 typedef struct

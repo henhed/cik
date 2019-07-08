@@ -250,6 +250,49 @@ walk_entries (CacheEntryHashMap *map, CacheEntryWalkCb callback,
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// STATS / DEBUG
+
+typedef struct
+{
+  int fd;
+  time_t now;
+  u32 map_index;
+} StatsCbData;
+
+static bool
+write_entry_stats_cb (CacheEntry *entry, StatsCbData *data)
+{
+  time_t expires = entry->expires;
+  if (expires != CACHE_EXPIRES_INIT)
+    expires -= data->now;
+  dprintf (data->fd, "%u\t%u\t%u\t%ld\t%ld\t%u\t%s\n",
+           entry->nhits,
+           entry->value.nmemb,
+           entry->tags.nmemb,
+           data->now - entry->mtime,
+           expires,
+           data->map_index,
+           key2str (entry->key));
+  return false;
+}
+
+void
+write_entry_stats (int fd, CacheEntryHashMap **maps, u32 nmaps)
+{
+  StatsCbData data = {};
+  data.fd = fd;
+  data.now = time (NULL);
+
+  dprintf (fd, "Hits\tSize\tTags\tAge\tTTL\tMap\tKey\n");
+
+  for (u32 i = 0; i < nmaps; ++i)
+    {
+      data.map_index = i;
+      walk_entries (maps[i], (CacheEntryWalkCb) write_entry_stats_cb, &data);
+    }
+}
+
 void
 debug_print_entry (CacheEntry *entry)
 {

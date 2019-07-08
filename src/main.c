@@ -18,12 +18,15 @@
 #include "util.h"
 #include "log.h"
 
-volatile atomic_bool quit;
+atomic_bool quit;
+atomic_bool do_write_stats;
 static thrd_t logging_thread;
 
 static int run_logging_thread (const char *);
 static void sigint_handler (int);
+static void sigusr1_handler (int);
 static bool write_entry_as_set_request_callback (CacheEntry *, int *);
+static void write_stats (RuntimeConfig *);
 
 int
 main (int argc, char **argv)
@@ -33,6 +36,9 @@ main (int argc, char **argv)
 
   if (config == NULL)
     return EXIT_FAILURE;
+
+  atomic_init (&quit, false);
+  atomic_init (&do_write_stats, false);
 
   ////////////////////////////////////////
   // Sanity checks
@@ -51,6 +57,10 @@ main (int argc, char **argv)
   signal (SIGINT, sigint_handler);
   // Ignore broken pipe so logger can write to fifo w/o listeners
   signal (SIGPIPE, SIG_IGN);
+  // Print stats when we get this signal
+  signal (SIGUSR1, sigusr1_handler);
+  // Ignore to avoid killing by typo. Might be used later for GC or sth maybe.
+  signal (SIGUSR2, SIG_IGN);
 
   if (0 > init_memory ())
     return EXIT_FAILURE;
@@ -58,7 +68,7 @@ main (int argc, char **argv)
   for (u32 i = 0; i < NUM_CACHE_ENTRY_MAPS; ++i)
     init_cache_entry_map (entry_maps[i]);
 
-  dbg_print ("Starting server on %d.%d.%d.%d:%d\n",
+  nfo_print ("Starting server on %d.%d.%d.%d:%d\n",
              (ntohl (config->listen_address) & 0xFF000000) >> 24,
              (ntohl (config->listen_address) & 0x00FF0000) >> 16,
              (ntohl (config->listen_address) & 0x0000FF00) >>  8,
@@ -69,9 +79,6 @@ main (int argc, char **argv)
       err_print ("Failed to start server: %s\n", strerror (errno));
       return EXIT_FAILURE;
     }
-
-  FILE *info_file = fopen  ("info.txt", "w"); // @Incomplete: Scrap or improve
-  int   info_fd   = fileno (info_file);
 
   persistence_fd = open (config->persistence_filename,
                          O_RDWR | O_CREAT,
@@ -100,27 +107,23 @@ main (int argc, char **argv)
 
   while (!atomic_load (&quit))
     {
-      ftruncate (info_fd, 0);
-      lseek (info_fd, SEEK_SET, 0);
-      debug_print_profilers (info_fd);
-      debug_print_memory (info_fd);
-      debug_print_tags (info_fd);
-      debug_print_clients (info_fd);
-      debug_print_workers (info_fd);
+      if (atomic_load (&do_write_stats))
+        {
+          atomic_store (&do_write_stats, false);
+          write_stats (config);
+        }
       sleep (1);
     }
 
   ////////////////////////////////////////
   // Clean up
 
-  dbg_print ("\nShutting down ..\n");
+  nfo_print ("Shutting down %s\n", "..");
 
   stop_server ();
 
   if (0 > thrd_join (logging_thread, NULL))
     err_print ("%s\n", strerror (errno));
-
-  fclose (info_file);
 
   // Persist current state
   ftruncate (persistence_fd, 0);
@@ -174,6 +177,13 @@ sigint_handler (int sig)
   atomic_store (&quit, true);
 }
 
+static void
+sigusr1_handler (int sig)
+{
+  signal (sig, sigusr1_handler);
+  atomic_store (&do_write_stats, true);
+}
+
 static bool
 write_entry_as_set_request_callback (CacheEntry *entry, int *fd)
 {
@@ -210,4 +220,45 @@ write_entry_as_set_request_callback (CacheEntry *entry, int *fd)
   write (*fd, entry->value.base, entry->value.nmemb);
 
   return true;
+}
+
+static void
+write_entry_stats_proxy (int fd)
+{
+  write_entry_stats (fd, entry_maps, NUM_CACHE_ENTRY_MAPS);
+}
+
+static void
+write_stats (RuntimeConfig *config)
+{
+  struct {
+    const char *filename;
+    void (*write_fn) (int);
+  } writer_map[] = {
+    {config->entry_stats_filename,  write_entry_stats_proxy},
+    {config->tag_stats_filename,    debug_print_tags},
+    {config->memory_stats_filename, debug_print_memory},
+    {config->client_stats_filename, debug_print_clients},
+    {config->worker_stats_filename, debug_print_workers}
+  };
+  for (u8 i = 0; i < sizeof (writer_map) / sizeof (writer_map[0]); ++i)
+    {
+      FILE *file;
+      u64 start_tick = get_performance_counter (), num_ticks;
+      if (!writer_map[i].filename || !writer_map[i].write_fn)
+        continue;
+
+      file = fopen (writer_map[i].filename, "w");
+      if (file)
+        {
+          writer_map[i].write_fn (fileno (file));
+          fclose (file);
+          num_ticks = get_performance_counter () - start_tick;
+          nfo_print ("Wrote %s in %.3f s\n", writer_map[i].filename,
+                     (double) num_ticks / get_performance_frequency ());
+        }
+      else
+        err_print ("Failed to open %s: %s\n", writer_map[i].filename,
+                   strerror (errno));
+    }
 }

@@ -11,12 +11,22 @@
 
 char log_filename[0x400] = "/tmp/cik-server.log";
 char persistence_filename[0x400] = "/tmp/cik-server.persistent-data";
+char entry_stats_filename[0x400] = "";
+char tag_stats_filename[0x400] = "";
+char memory_stats_filename[0x400] = "";
+char client_stats_filename[0x400] = "";
+char worker_stats_filename[0x400] = "";
 
 static RuntimeConfig runtime_config = {
-  .listen_address       = INADDR_ANY,
-  .listen_port          = (0x32 << 8) | 0x4F, // 20274 big endian
-  .log_filename         = log_filename,
-  .persistence_filename = persistence_filename
+  .listen_address           = INADDR_ANY,
+  .listen_port              = (0x32 << 8) | 0x4F, // 20274 big endian
+  .log_filename             = log_filename,
+  .persistence_filename     = persistence_filename,
+  .entry_stats_filename     = NULL, // Disabled by default
+  .tag_stats_filename       = NULL, // Disabled by default
+  .memory_stats_filename    = NULL, // Disabled by default
+  .client_stats_filename    = NULL, // Disabled by default
+  .worker_stats_filename    = NULL  // Disabled by default
 };
 
 bool parse_variable (const char *, int, const char *, char *);
@@ -175,6 +185,36 @@ parse_variable (const char *filename, int lineno, const char *name, char *value)
     {
       strncpy (persistence_filename, value, sizeof (persistence_filename));
       persistence_filename[sizeof (persistence_filename) - 1] = '\0';
+    }
+  else if (0 == strcmp(name, "entry_stats_filename"))
+    {
+      strncpy (entry_stats_filename, value, sizeof (entry_stats_filename));
+      entry_stats_filename[sizeof (entry_stats_filename) - 1] = '\0';
+      runtime_config.entry_stats_filename = entry_stats_filename;
+    }
+  else if (0 == strcmp(name, "tag_stats_filename"))
+    {
+      strncpy (tag_stats_filename, value, sizeof (tag_stats_filename));
+      tag_stats_filename[sizeof (tag_stats_filename) - 1] = '\0';
+      runtime_config.tag_stats_filename = tag_stats_filename;
+    }
+  else if (0 == strcmp(name, "memory_stats_filename"))
+    {
+      strncpy (memory_stats_filename, value, sizeof (memory_stats_filename));
+      memory_stats_filename[sizeof (memory_stats_filename) - 1] = '\0';
+      runtime_config.memory_stats_filename = memory_stats_filename;
+    }
+  else if (0 == strcmp(name, "client_stats_filename"))
+    {
+      strncpy (client_stats_filename, value, sizeof (client_stats_filename));
+      client_stats_filename[sizeof (client_stats_filename) - 1] = '\0';
+      runtime_config.client_stats_filename = client_stats_filename;
+    }
+  else if (0 == strcmp(name, "worker_stats_filename"))
+    {
+      strncpy (worker_stats_filename, value, sizeof (worker_stats_filename));
+      worker_stats_filename[sizeof (worker_stats_filename) - 1] = '\0';
+      runtime_config.worker_stats_filename = worker_stats_filename;
     }
   else
     {

@@ -22,6 +22,9 @@ static thread_local Client *current_client = NULL;
 static inline CacheEntryHashMap *
 get_map_for_key (CacheKey key)
 {
+  // @Revisit: Distibution is good when keys have high entry at the end but some
+  // keys have /both/ prefix /and/ suffix. Ex:
+  //   e69_LAYOUT_FRONTEND_STORE1_408DE8216887838FDFE8FE49819AC15F8_PAGE_LAYOUT
   u32 map_index = 0;
   if (key.nmemb >= sizeof (u64))
     map_index = (*(u64 *) key.base) % NUM_CACHE_ENTRY_MAPS;
@@ -118,8 +121,6 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
       return STATUS_NOT_FOUND;
     }
 
-  log_request_get_hit (client, key);
-
   if (~flags & GET_FLAG_IGNORE_EXPIRES)
     {
       if (entry->expires != CACHE_EXPIRES_INIT)
@@ -128,11 +129,15 @@ handle_get_request (Client *client, Request *request, Payload **response_payload
           if (entry->expires < now)
             {
               UNLOCK_ENTRY (entry);
+              log_request_get_miss (client, key);
+              ++client->counters.get_miss;
               return STATUS_EXPIRED;
             }
         }
     }
 
+  log_request_get_hit (client, key);
+  ++entry->nhits;
   ++client->counters.get_hit;
 
   if (entry->value.nmemb > payload_buffer->cap)

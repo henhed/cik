@@ -33,6 +33,10 @@
 # define dbg_print(fmt, ...)
 #endif
 
+#define nfo_print(fmt, ...)                                     \
+  fprintf (stdout, BLUE ("I") " %s:%d: %s: " fmt,               \
+           __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
+
 #define wrn_print(fmt, ...)                                     \
   fprintf (stderr, YELLOW ("W") " %s:%d: %s: " fmt,             \
            __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
