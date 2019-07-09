@@ -266,7 +266,7 @@ write_stats (RuntimeConfig *config)
     {config->entry_stats_filename,  write_entry_stats_proxy},
     {config->tag_stats_filename,    write_tag_stats},
     {config->memory_stats_filename, write_memory_stats},
-    {config->client_stats_filename, debug_print_clients},
+    {config->client_stats_filename, write_client_stats},
     {config->worker_stats_filename, debug_print_workers}
   };
   for (u8 i = 0; i < sizeof (writer_map) / sizeof (writer_map[0]); ++i)

@@ -430,18 +430,12 @@ flush_worker_logs (int fd)
 }
 
 static void
-debug_print_client (int fd, Client *client)
+write_client_stats_line (int fd, Client *client)
 {
-  int count = 0;
-
-  count = dprintf (fd, "%d.%d.%d.%d:%d",
-                   (client->addr.sin_addr.s_addr & 0x000000FF) >>  0,
-                   (client->addr.sin_addr.s_addr & 0x0000FF00) >>  8,
-                   (client->addr.sin_addr.s_addr & 0x00FF0000) >> 16,
-                   (client->addr.sin_addr.s_addr & 0xFF000000) >> 24,
-                   client->addr.sin_port);
-
-  count += dprintf (fd, "%.*s", 24 - count, BLANKSTR);
+  dprintf (fd, "%u\t%u\t%u\t%u\t%u\t%u\t%u\t",
+           client->counters.get_hit, client->counters.get_miss,
+           client->counters.set, client->counters.del, client->counters.clr,
+           client->counters.lst, client->counters.nfo);
 
   if (client->timers.last_request_start_tick
       < client->timers.last_request_end_tick)
@@ -449,9 +443,7 @@ debug_print_client (int fd, Client *client)
       u64 idle_ticks = (get_performance_counter ()
                         - client->timers.last_request_end_tick);
       float idle_secs = (float) idle_ticks / get_performance_frequency ();
-      dprintf (fd, BEGIN_YELLOW);
-      count += dprintf (fd, "%5.1fI", idle_secs);
-      dprintf (fd, RESET_ANSI_FMT);
+      dprintf (fd, "+%.2f", idle_secs);
     }
   else if (client->timers.last_request_end_tick
            < client->timers.last_request_start_tick)
@@ -459,57 +451,31 @@ debug_print_client (int fd, Client *client)
       u64 work_ticks = (get_performance_counter ()
                         - client->timers.last_request_start_tick);
       float work_secs = (float) work_ticks / get_performance_frequency ();
-      dprintf (fd, BEGIN_RED);
-      count += dprintf (fd, "%5.1fW", work_secs);
-      dprintf (fd, RESET_ANSI_FMT);
+      dprintf (fd, "-%.2fW", work_secs);
     }
 
-  dprintf (fd, "%.*s", 31 - count, BLANKSTR);
-  dprintf (fd, "%4d", client->fd);
-  dprintf (fd, GREEN  ("   %6u"),  client->counters.get_hit);
-  dprintf (fd, RED    ("   %6u"), client->counters.get_miss);
-  dprintf (fd, BLUE   ("%5u"),        client->counters.set);
-  dprintf (fd, YELLOW ("%5u"),        client->counters.del);
-  dprintf (fd, YELLOW ("%5u"),        client->counters.clr);
-  dprintf (fd, GREEN  ("%5u"),        client->counters.lst);
-  dprintf (fd, GREEN  ("%5u"),        client->counters.nfo);
+  dprintf (fd, "\t");
+  dprintf (fd, "%d\t", atomic_load (&client->fd));
 
-  dprintf (fd, "\n");
+  dprintf (fd, "%d.%d.%d.%d:%d\n",
+           (client->addr.sin_addr.s_addr & 0x000000FF) >>  0,
+           (client->addr.sin_addr.s_addr & 0x0000FF00) >>  8,
+           (client->addr.sin_addr.s_addr & 0x00FF0000) >> 16,
+           (client->addr.sin_addr.s_addr & 0xFF000000) >> 24,
+           client->addr.sin_port);
 }
 
 void
-debug_print_clients (int fd)
+write_client_stats (int fd)
 {
-  int count = 0;
+  dprintf (fd, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+           "HIT", "MISS", "SET", "DEL", "CLR", "LST", "NFO", "I+/W-", "FD", "Host");
 
   for (u32 i = 0; i < MAX_NUM_CLIENTS; ++i)
     {
-      if (clients[i].fd != -1)
-        ++count;
+      if (atomic_load (&clients[i].fd) != -1)
+        write_client_stats_line (fd, &clients[i]);
     }
-
-  count = dprintf (fd, "CLIENTS (%d) ", count);
-  dprintf (fd, "%.*s\n", LINEWIDTH - count, HLINESTR);
-
-  dprintf (fd, "%s",   "HOST");
-  dprintf (fd, "%26s", "I/W");
-  dprintf (fd, "%5s",  "FD");
-  dprintf (fd, "%9s",  "GET (H)");
-  dprintf (fd, "%9s",  "GET (M)");
-  dprintf (fd, "%5s",  "SET");
-  dprintf (fd, "%5s",  "DEL");
-  dprintf (fd, "%5s",  "CLR");
-  dprintf (fd, "%5s",  "LST");
-  dprintf (fd, "%5s",  "NFO");
-  dprintf (fd, "\n");
-
-  for (u32 i = 0; i < MAX_NUM_CLIENTS; ++i)
-    {
-      if (clients[i].fd != -1)
-        debug_print_client (fd, &clients[i]);
-    }
-
-  dprintf (fd, "\n");
 }
 
 void

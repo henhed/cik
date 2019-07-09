@@ -14,7 +14,7 @@ void       close_client           (Client *);
 void       flush_worker_logs      (int);
 
 void load_request_log    (int);
-void debug_print_clients (int);
+void write_client_stats  (int);
 void debug_print_workers (int);
 
 #endif /* ! SERVER_H */
