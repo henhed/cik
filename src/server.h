@@ -15,6 +15,6 @@ void       flush_worker_logs      (int);
 
 void load_request_log    (int);
 void write_client_stats  (int);
-void debug_print_workers (int);
+void write_workers_stats (int);
 
 #endif /* ! SERVER_H */

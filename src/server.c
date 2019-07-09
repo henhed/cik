@@ -479,20 +479,13 @@ write_client_stats (int fd)
 }
 
 void
-debug_print_workers (int fd)
+write_workers_stats (int fd)
 {
-  int count;
   float to_ms = 1000.f / get_performance_frequency ();
 
-  count = dprintf (fd, "WORKERS (%d) ", NUM_WORKERS);
-  dprintf (fd, "%.*s\n", LINEWIDTH - count, HLINESTR);
-  dprintf (fd, "      GET    ");
-  dprintf (fd, " |    SET    ");
-  dprintf (fd, " |    DEL    ");
-  dprintf (fd, " |    CLR    ");
-  dprintf (fd, " |    LST    ");
-  dprintf (fd, " |    NFO    ");
-  dprintf (fd, "\n");
+  dprintf (fd, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+           "GET(n)", "GET(t)", "SET(n)", "SET(t)", "DEL(n)", "DEL(t)",
+           "CLR(n)", "CLR(t)", "LST(n)", "LST(t)", "NFO(n)", "NFO(t)");
 
   for (u32 i = 0; i < NUM_WORKERS; ++i)
     {
@@ -502,36 +495,28 @@ debug_print_workers (int fd)
 
       seconds = to_ms * worker->timers.get;
       seconds_avg = worker->counters.get ? (seconds / worker->counters.get) : 0.f;
-      dprintf (fd, " %5u", worker->counters.get);
-      dprintf (fd, " %6.2f", seconds_avg);
+      dprintf (fd, "%u\t%.3f\t", worker->counters.get, seconds_avg);
 
       seconds = to_ms * worker->timers.set;
       seconds_avg = worker->counters.set ? (seconds / worker->counters.set) : 0.f;
-      dprintf (fd, " %5u", worker->counters.set);
-      dprintf (fd, " %6.2f", seconds_avg);
+      dprintf (fd, "%u\t%.3f\t", worker->counters.set, seconds_avg);
 
       seconds = to_ms * worker->timers.del;
       seconds_avg = worker->counters.del ? (seconds / worker->counters.del) : 0.f;
-      dprintf (fd, " %5u", worker->counters.del);
-      dprintf (fd, " %6.2f", seconds_avg);
+      dprintf (fd, "%u\t%.3f\t", worker->counters.del, seconds_avg);
 
       seconds = to_ms * worker->timers.clr;
       seconds_avg = worker->counters.clr ? (seconds / worker->counters.clr) : 0.f;
-      dprintf (fd, " %5u", worker->counters.clr);
-      dprintf (fd, " %6.2f", seconds_avg);
+      dprintf (fd, "%u\t%.3f\t", worker->counters.clr, seconds_avg);
 
       seconds = to_ms * worker->timers.lst;
       seconds_avg = worker->counters.lst ? (seconds / worker->counters.lst) : 0.f;
-      dprintf (fd, " %5u", worker->counters.lst);
-      dprintf (fd, " %6.2f", seconds_avg);
+      dprintf (fd, "%u\t%.3f\t", worker->counters.lst, seconds_avg);
 
       seconds = to_ms * worker->timers.nfo;
       seconds_avg = worker->counters.nfo ? (seconds / worker->counters.nfo) : 0.f;
-      dprintf (fd, " %5u", worker->counters.nfo);
-      dprintf (fd, " %6.2f", seconds_avg);
+      dprintf (fd, "%u\t%.3f", worker->counters.nfo, seconds_avg);
 
       dprintf (fd, "\n");
     }
-
-  dprintf (fd, "\n");
 }
