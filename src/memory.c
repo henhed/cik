@@ -275,19 +275,13 @@ populate_nfo_response (NFOResponsePayload *nfo)
 }
 
 void
-debug_print_memory (int fd)
+write_memory_stats (int fd)
 {
-  int count = 0;
-  u32 memory_left = atomic_load (&memory_cursor) - (uintptr_t) main_memory;
+  u32 memory_left = (((uintptr_t) main_memory + MAX_TOTAL_MEMORY)
+                     - atomic_load (&memory_cursor));
 
-  static u32 kb = 1024;
-  static u32 mb = 1024 * 1024;
-
-  count = dprintf (fd, "MEMORY PARTITIONS (%.2f%%) ",
-                   100.f * ((float) memory_left / MAX_TOTAL_MEMORY));
-  dprintf (fd, "%.*s\n", LINEWIDTH - count, HLINESTR);
-
-  dprintf (fd, "%-24s%-24s%-24s%s\n", "Item Size", "Used", "Free", "Reused");
+  dprintf (fd, "%s\t%s\t%s\t%s\t%s\n",
+           "Size", "Used", "Free", "Reused", "Available");
 
   for (Partition **p = &partitions; *p; p = &(*p)->next)
     {
@@ -295,21 +289,7 @@ debug_print_memory (int fd)
       u32 num_used   = atomic_load (&partition->num_used);
       u32 num_free   = atomic_load (&partition->num_free);
       u32 num_reused = atomic_load (&partition->num_reused);
-
-      dprintf (fd, "%8u%s",
-               ((partition->size >= mb)
-                ? (partition->size / mb)
-                : (partition->size >= kb
-                   ? (partition->size / kb)
-                   : partition->size)),
-               ((partition->size >= mb)
-                ? "M"
-                : (partition->size >= kb ? "K" : "B")));
-      dprintf (fd, "         %10u", num_used);
-      dprintf (fd, "              %10u", num_free);
-      dprintf (fd, "                %10u", num_reused);
-      dprintf (fd, "\n");
+      dprintf (fd, "%u\t%u\t%u\t%u\t%u\n", partition->size, num_used, num_free,
+               num_reused, memory_left / partition->size);
     }
-
-  dprintf (fd, "\n");
 }

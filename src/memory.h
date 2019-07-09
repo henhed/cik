@@ -12,6 +12,6 @@ CacheEntry *reserve_and_lock_entry              (size_t);
 bool        reserve_biggest_possible_payload    (Payload *);
 void        release_all_memory                  (void);
 void        populate_nfo_response               (NFOResponsePayload *);
-void        debug_print_memory                  (int);
+void        write_memory_stats                  (int);
 
 #endif /* ! MEMORY_H */

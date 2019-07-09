@@ -265,7 +265,7 @@ write_stats (RuntimeConfig *config)
   } writer_map[] = {
     {config->entry_stats_filename,  write_entry_stats_proxy},
     {config->tag_stats_filename,    write_tag_stats},
-    {config->memory_stats_filename, debug_print_memory},
+    {config->memory_stats_filename, write_memory_stats},
     {config->client_stats_filename, debug_print_clients},
     {config->worker_stats_filename, debug_print_workers}
   };
