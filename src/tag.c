@@ -30,8 +30,11 @@ static u8 root_value[] = { 'R', 'O', 'O', 'T' };
 static TagNode root = {
   .tag.base  = root_value,
   .tag.nmemb = sizeof (root_value),
-  .left      = NULL,
-  .right     = NULL
+  .keys      = NULL,
+  .keys_lock = ATOMIC_FLAG_INIT,
+  .num_keys  = ATOMIC_VAR_INIT (0),
+  .left      = ATOMIC_VAR_INIT (NULL),
+  .right     = ATOMIC_VAR_INIT (NULL)
 };
 
 static bool
@@ -51,10 +54,11 @@ create_key_elem (CacheKey key)
   elem = reserve_memory (sizeof (KeyElem) + (sizeof (u8) * key.nmemb));
   if (elem)
     {
-      *elem = (KeyElem) { 0 };
+      *elem = (KeyElem) {};
       elem->key.base = (u8 *) (elem + 1);
       elem->key.nmemb = key.nmemb;
       memcpy (elem->key.base, key.base, key.nmemb);
+      elem->next = NULL;
     }
   return elem;
 }
@@ -65,11 +69,15 @@ create_tag_node (CacheTag tag)
   TagNode *node;
   node = reserve_memory (sizeof (TagNode) + (sizeof (u8) * tag.nmemb));
   cik_assert (node != NULL); // @Incomplete: Bubble out-of-memory status
-  *node = (TagNode) { 0 };
+  *node = (TagNode) {};
   node->tag.base = (u8 *) (node + 1);
   node->tag.nmemb = tag.nmemb;
   memcpy (node->tag.base, tag.base, tag.nmemb);
+  node->keys = NULL;
   node->keys_lock = (atomic_flag) ATOMIC_FLAG_INIT;
+  atomic_init (&node->num_keys, 0);
+  atomic_init (&node->left, NULL);
+  atomic_init (&node->right, NULL);
   return node;
 }
 
@@ -230,7 +238,8 @@ add_key_to_tag (CacheTag tag, CacheKey key)
 
   LOCK_KEYS_AND_LOG_SPIN (node);
 
-  insert_if_unique (&node->keys, key);
+  if (insert_if_unique (&node->keys, key))
+    atomic_fetch_add_explicit (&node->num_keys, 1, memory_order_relaxed);
 
   UNLOCK_KEYS (node);
 }
@@ -251,6 +260,7 @@ remove_key_from_tag (CacheTag tag, CacheKey key)
           KeyElem *found = *elem;
           *elem = found->next;
           release_memory (found);
+          atomic_fetch_sub_explicit (&node->num_keys, 1, memory_order_relaxed);
           break; // We assume there are no dupes (`insert_if_unique').
         }
     }
@@ -392,87 +402,39 @@ get_keys_matching_all_tags (CacheTag *tags, u8 ntags)
   return found_keys;
 }
 
-typedef struct
-{
-  CacheTag tag;
-  u32 tree_depth;
-  u32 num_keys;
-} DebugTag;
-
-#define NUM_DEBUG_TAGS 10
-#define LAST_DEBUG_TAG (NUM_DEBUG_TAGS - 1)
 #define MAX_DEBUG_TAG_DEPTH 1024 // Recursion overflow protection
 
-typedef struct
-{
-  DebugTag tags[NUM_DEBUG_TAGS];
-  u32 total_num_tags;
-  u32 max_depth;
-} DebugSummary;
-
-static int
-cmp_debug_tag (const void *_a, const void *_b)
-{
-  const DebugTag *a = _a;
-  const DebugTag *b = _b;
-  if (a->num_keys < b->num_keys)
-    return 1;
-  else if (b->num_keys < a->num_keys)
-    return -1;
-  return 0;
-}
-
-void
-debug_find_popular_tags (TagNode *node, u32 depth, DebugSummary *summary)
+static void
+write_tag_tree_stats (TagNode *node, u32 depth, int fd)
 {
   u32 num_keys = 0;
 
   cik_assert (depth <= MAX_DEBUG_TAG_DEPTH);
-  if ((node == NULL) || (depth > MAX_DEBUG_TAG_DEPTH))
+  if (node == NULL)
     return;
 
-  ++summary->total_num_tags;
-
-  if (depth > summary->max_depth)
-    summary->max_depth = depth;
+  if (depth > MAX_DEBUG_TAG_DEPTH)
+    {
+      err_print ("Max recursion depth exceeded (%u)\n", MAX_DEBUG_TAG_DEPTH);
+      return;
+    }
 
   LOCK_KEYS_AND_LOG_SPIN (node);
   for (KeyElem **elem = &node->keys; *elem; elem = &(*elem)->next)
     ++num_keys;
   UNLOCK_KEYS (node);
 
-  if (summary->tags[LAST_DEBUG_TAG].num_keys < num_keys)
-    {
-      summary->tags[LAST_DEBUG_TAG].tag = node->tag;
-      summary->tags[LAST_DEBUG_TAG].tree_depth = depth;
-      summary->tags[LAST_DEBUG_TAG].num_keys = num_keys;
-      qsort (summary->tags, NUM_DEBUG_TAGS, sizeof (DebugTag), cmp_debug_tag);
-    }
+  dprintf (fd, "%u\t%u\t%s\n",
+           atomic_load (&node->num_keys), depth, tag2str (node->tag));
 
-  debug_find_popular_tags (TAG_NODE_LEFT  (node), depth + 1, summary);
-  debug_find_popular_tags (TAG_NODE_RIGHT (node), depth + 1, summary);
+  write_tag_tree_stats (TAG_NODE_LEFT  (node), depth + 1, fd);
+  write_tag_tree_stats (TAG_NODE_RIGHT (node), depth + 1, fd);
 }
 
 void
-debug_print_tags (int fd)
+write_tag_stats (int fd)
 {
-  DebugSummary summary = { 0 };
-  debug_find_popular_tags (&root, 0, &summary);
-
-  int count = 0;
-  count = dprintf (fd, "TAGS (count: %u, depth: %u) ",
-                   summary.total_num_tags, summary.max_depth);
-  dprintf (fd, "%.*s\n", LINEWIDTH - count, HLINESTR);
-
-  dprintf (fd, "NAME %66s  %s\n", "KEYS", "DEPTH");
-  for (u32 i = 0; i < NUM_DEBUG_TAGS; ++i)
-    {
-      DebugTag *dt = &summary.tags[i];
-      if (dt->num_keys == 0)
-        break;
-      dprintf (fd, "%-64s %6u %6u\n",
-               tag2str (dt->tag), dt->num_keys, dt->tree_depth);
-    }
-
-  dprintf (fd, "\n");
+  dprintf (fd, "%s\t%s\t%s\n", "Keys", "Depth", "Tag");
+  write_tag_tree_stats (TAG_NODE_LEFT  (&root), 1, fd);
+  write_tag_tree_stats (TAG_NODE_RIGHT (&root), 1, fd);
 }

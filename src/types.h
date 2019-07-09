@@ -58,6 +58,7 @@ typedef struct _TagNode
   CacheTag tag;
   KeyElem *keys;
   atomic_flag keys_lock;
+  _Atomic (u32) num_keys;
   _Atomic (struct _TagNode *) left;
   _Atomic (struct _TagNode *) right;
 } TagNode;

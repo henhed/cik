@@ -9,6 +9,6 @@ void     walk_all_tags                (CacheTagWalkCb, void *);
 KeyElem *get_keys_matching_any_tag    (CacheTag *, u8); // A.K.A. union
 KeyElem *get_keys_matching_all_tags   (CacheTag *, u8); // A.K.A. intersection
 void     release_key_list             (KeyElem *);
-void     debug_print_tags             (int);
+void     write_tag_stats              (int);
 
 #endif /* ! TAG_H */
