@@ -9,6 +9,7 @@
 #include "log.h"
 #include "types.h"
 
+char pid_filename[0x400] = "/tmp/cik-server.pid";
 char log_filename[0x400] = "/tmp/cik-server.log";
 char persistence_filename[0x400] = "/tmp/cik-server.persistent-data";
 char entry_stats_filename[0x400] = "";
@@ -20,6 +21,7 @@ char worker_stats_filename[0x400] = "";
 static RuntimeConfig runtime_config = {
   .listen_address           = INADDR_ANY,
   .listen_port              = (0x32 << 8) | 0x4F, // 20274 big endian
+  .pid_filename             = pid_filename,
   .log_filename             = log_filename,
   .persistence_filename     = persistence_filename,
   .entry_stats_filename     = NULL, // Disabled by default
@@ -108,6 +110,8 @@ parse_args (int argc, char **argv)
         return NULL;
     }
 
+  fclose (cfg_file);
+
   return &runtime_config;
 }
 
@@ -175,6 +179,11 @@ parse_variable (const char *filename, int lineno, const char *name, char *value)
         }
 
       runtime_config.listen_port = htons (port);
+    }
+  else if (0 == strcmp(name, "pid_filename"))
+    {
+      strncpy (pid_filename, value, sizeof (pid_filename));
+      pid_filename[sizeof (pid_filename) - 1] = '\0';
     }
   else if (0 == strcmp(name, "log_filename"))
     {

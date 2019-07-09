@@ -27,15 +27,34 @@ static void sigint_handler (int);
 static void sigusr1_handler (int);
 static bool write_entry_as_set_request_callback (CacheEntry *, int *);
 static void write_stats (RuntimeConfig *);
+static void unlock_and_close_fd_ptr (int *);
 
 int
 main (int argc, char **argv)
 {
   RuntimeConfig *config = parse_args (argc, argv);
-  int persistence_fd;
+  int pid_fd         __attribute__ ((__cleanup__ (unlock_and_close_fd_ptr))) = -1;
+  int persistence_fd __attribute__ ((__cleanup__ (unlock_and_close_fd_ptr))) = -1;
 
   if (config == NULL)
     return EXIT_FAILURE;
+
+  pid_fd  = open (config->pid_filename,
+                  O_WRONLY | O_CREAT | O_TRUNC,
+                  S_IRUSR | S_IWUSR | S_IRGRP);
+  if (pid_fd < 0)
+    {
+      err_print ("Could not open %s: %s\n", config->pid_filename,
+                 strerror (errno));
+      return EXIT_FAILURE;
+    }
+  if (flock (pid_fd, LOCK_EX | LOCK_NB) < 0)
+    {
+      err_print ("Could not lock %s: %s\n", config->pid_filename,
+                 strerror (errno));
+      return EXIT_FAILURE;
+    }
+  dprintf (pid_fd, "%d", getpid ());
 
   atomic_init (&quit, false);
   atomic_init (&do_write_stats, false);
@@ -134,8 +153,6 @@ main (int argc, char **argv)
                     (CacheEntryWalkCb) write_entry_as_set_request_callback,
                     &persistence_fd);
     }
-  flock (persistence_fd, LOCK_UN);
-  close (persistence_fd);
 
   release_all_memory ();
 
@@ -168,6 +185,17 @@ run_logging_thread (const char *logfile)
   close (wr_fd);
 
   return thrd_success;
+}
+
+static void
+unlock_and_close_fd_ptr (int *fd)
+{
+  cik_assert (fd != NULL);
+  if (fd && (*fd >= 0))
+    {
+      flock (*fd, LOCK_UN);
+      close (*fd);
+    }
 }
 
 static void

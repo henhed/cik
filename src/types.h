@@ -131,6 +131,7 @@ struct _RuntimeConfig
 {
   in_addr_t listen_address;
   in_port_t listen_port;
+  const char *pid_filename;
   const char *log_filename;
   const char *persistence_filename;
   const char *entry_stats_filename;
