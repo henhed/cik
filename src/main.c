@@ -10,6 +10,10 @@
 #include <threads.h>
 #include <unistd.h>
 
+#ifdef HAVE_SYSTEMD
+# include <systemd/sd-daemon.h>
+#endif
+
 #include "memory.h"
 #include "entry.h"
 #include "tag.h"
@@ -24,6 +28,7 @@ static thrd_t logging_thread;
 
 static int run_logging_thread (const char *);
 static void sigint_handler (int);
+static void sigterm_handler (int);
 static void sigusr1_handler (int);
 static bool write_entry_as_set_request_callback (CacheEntry *, int *);
 static void write_stats (RuntimeConfig *);
@@ -39,9 +44,9 @@ main (int argc, char **argv)
   if (config == NULL)
     return EXIT_FAILURE;
 
-  pid_fd  = open (config->pid_filename,
-                  O_WRONLY | O_CREAT | O_TRUNC,
-                  S_IRUSR | S_IWUSR | S_IRGRP);
+  pid_fd = open (config->pid_filename,
+                 O_WRONLY | O_CREAT | O_TRUNC,
+                 S_IRUSR | S_IWUSR | S_IRGRP);
   if (pid_fd < 0)
     {
       err_print ("Could not open %s: %s\n", config->pid_filename,
@@ -55,6 +60,10 @@ main (int argc, char **argv)
       return EXIT_FAILURE;
     }
   dprintf (pid_fd, "%d", getpid ());
+
+#ifdef HAVE_SYSTEMD
+  sd_notifyf (0, "MAINPID=%lu", (unsigned long) getpid ());
+#endif
 
   atomic_init (&quit, false);
   atomic_init (&do_write_stats, false);
@@ -74,6 +83,8 @@ main (int argc, char **argv)
 
   // Try to cleanly exit given SIGINT
   signal (SIGINT, sigint_handler);
+  // Try to cleanly exit given SIGTERM
+  signal (SIGTERM, sigterm_handler);
   // Ignore broken pipe so logger can write to fifo w/o listeners
   signal (SIGPIPE, SIG_IGN);
   // Print stats when we get this signal
@@ -124,6 +135,10 @@ main (int argc, char **argv)
 
   load_request_log (persistence_fd);
 
+#ifdef HAVE_SYSTEMD
+  sd_notify (0, "READY=1");
+#endif
+
   while (!atomic_load (&quit))
     {
       if (atomic_load (&do_write_stats))
@@ -136,6 +151,10 @@ main (int argc, char **argv)
 
   ////////////////////////////////////////
   // Clean up
+
+#ifdef HAVE_SYSTEMD
+  sd_notify (0, "STOPPING=1");
+#endif
 
   nfo_print ("Shutting down %s\n", "..");
 
@@ -200,6 +219,13 @@ unlock_and_close_fd_ptr (int *fd)
 
 static void
 sigint_handler (int sig)
+{
+  signal (sig, SIG_DFL);
+  atomic_store (&quit, true);
+}
+
+static void
+sigterm_handler (int sig)
 {
   signal (sig, SIG_DFL);
   atomic_store (&quit, true);

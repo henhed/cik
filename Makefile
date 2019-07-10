@@ -1,24 +1,38 @@
-CC ?= gcc
+#!/usr/bin/make -f
+
+SHELL = /bin/sh
+CC = gcc
+INSTALL = install -c
+INSTALLDATA = install -c -m 644
 
 SRC_PATH = src
 BUILD_PATH = build
 BIN_PATH = $(BUILD_PATH)/bin
 BIN_NAME = cik
+CONF_NAME = cik.conf
 SRC_EXT = c
 
 SOURCES = $(shell find $(SRC_PATH) -name '*.$(SRC_EXT)' | sort -k 1nr | cut -f2-)
 OBJECTS = $(SOURCES:$(SRC_PATH)/%.$(SRC_EXT)=$(BUILD_PATH)/%.o)
 DEPS = $(OBJECTS:.o=.d)
 
-COMPILER_FLAGS = -std=c11 -Wall -Wextra -Werror -D_GNU_SOURCE -ggdb -DDEBUG=1
-#COMPILER_FLAGS = -std=c11 -Wall -Wextra -Werror -Winline -O3 -D_GNU_SOURCE -DDEBUG=0
+COMPILER_FLAGS = -std=c11 -Wall -Wextra -Werror -D_GNU_SOURCE -DHAVE_SYSTEMD=1
 INCLUDES = -I include/
-LIBS = -pthread
+LIBS = -pthread $(shell pkg-config --libs libsystemd)
 LDFLAGS =
 
+prefix = /usr/local
+bindir = $(prefix)/bin
+etcdir = /etc/cik
+
 .PHONY: release
-release: export CCFLAGS := $(CCFLAGS) $(COMPILER_FLAGS)
+release: export CCFLAGS := $(CCFLAGS) $(COMPILER_FLAGS) -Winline -O3 -DDEBUG=0
 release: dirs
+	@$(MAKE) all
+
+.PHONY: debug
+debug: export CCFLAGS := $(CCFLAGS) $(COMPILER_FLAGS) -ggdb -DDEBUG=1
+debug: dirs
 	@$(MAKE) all
 
 .PHONY: dirs
@@ -42,8 +56,13 @@ all: $(BIN_PATH)/$(BIN_NAME)
 	@ln -s $(BIN_PATH)/$(BIN_NAME) $(BIN_NAME)
 
 .PHONY: run
-run: release
-	@./$(BIN_NAME) cik.conf
+run: debug
+	@./$(BIN_NAME) ./cik.conf
+
+.PHONY: install
+install: release
+	@$(INSTALL) $(BIN_PATH)/$(BIN_NAME) $(DESTDIR)$(bindir)/$(BIN_NAME)
+	@$(INSTALLDATA) ./$(CONF_NAME) $(DESTDIR)$(etcdir)/$(CONF_NAME)
 
 $(BIN_PATH)/$(BIN_NAME): $(OBJECTS)
 	@echo "Linking: $@"

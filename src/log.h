@@ -4,6 +4,10 @@
 #include <stdio.h>
 #include <stdarg.h>
 
+#ifdef HAVE_SYSTEMD
+# include <systemd/sd-daemon.h>
+#endif
+
 #include "config.h"
 #include "types.h"
 #include "util.h"
@@ -33,17 +37,34 @@
 # define dbg_print(fmt, ...)
 #endif
 
-#define nfo_print(fmt, ...)                                     \
+#ifdef HAVE_SYSTEMD
+# define nfo_print(fmt, ...)                                    \
+  sd_notifyf (0, "STATUS=" fmt, __VA_ARGS__)
+#else
+# define nfo_print(fmt, ...)                                    \
   fprintf (stdout, BLUE ("I") " %s:%d: %s: " fmt,               \
            __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
+#endif
 
-#define wrn_print(fmt, ...)                                     \
+#ifdef HAVE_SYSTEMD
+# define wrn_print(fmt, ...)                                    \
+  fprintf (stderr, SD_WARNING "%s:%d: %s: " fmt,                \
+           __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
+#else
+# define wrn_print(fmt, ...)                                    \
   fprintf (stderr, YELLOW ("W") " %s:%d: %s: " fmt,             \
            __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
+#endif
 
-#define err_print(fmt, ...)                                     \
+#ifdef HAVE_SYSTEMD
+# define err_print(fmt, ...)                                    \
+  fprintf (stderr, SD_ERR "%s:%d: %s: " fmt,                    \
+           __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
+#else
+# define err_print(fmt, ...)                                    \
   fprintf (stderr, RED ("E") " %s:%d: %s: " fmt,                \
            __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
+#endif
 
 #define LOG_QUEUE_INIT (LogQueue) { \
   .mask = NUM_LOG_QUEUE_ELEMS - 1,  \
