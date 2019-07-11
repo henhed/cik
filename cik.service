@@ -1,0 +1,18 @@
+[Unit]
+Description=Simple key-value store
+After=network.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/cik /etc/cik/cik.conf
+ExecStartPre=-mkfifo /tmp/cik-server.log
+ExecStopPost=-rm /tmp/cik-server.log
+PIDFile=/tmp/cik-server.pid
+Restart=always
+User=cik
+Group=cik
+ProtectSystem=full
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
