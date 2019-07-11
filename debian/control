@@ -1,0 +1,19 @@
+Source: cik-server
+Section: net
+Priority: optional
+Maintainer: Henrik Hedelund <debian@henhed.se>
+Build-Depends: debhelper (>= 11), libc6-dev (>= 2.24), libsystemd-dev (>= 232)
+Standards-Version: 4.4.0
+Vcs-Browser: https://github.com/henhed/cik
+Vcs-Git: git@github.com:henhed/cik.git
+
+Package: cik-server
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, libc6 (>= 2.24), libsystemd0 (>= 232)
+Description: Simple key-value database with network interface
+ CiK is a key-value database in a similar vein to memcache.
+ CiK additionally provides native support for key-tag-relations
+ for fine-grained control over removal of a subset of data records.
+ .
+ The dataset is stored entirely in memory and flushed to disk on
+ program exit.
