@@ -1,6 +1,7 @@
 [Unit]
 Description=Simple key-value store
 After=network.target
+Documentation=man:cik(1)
 
 [Service]
 Type=notify

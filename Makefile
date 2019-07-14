@@ -10,6 +10,7 @@ BUILD_PATH = build
 BIN_PATH = $(BUILD_PATH)/bin
 BIN_NAME = cik
 CONF_NAME = cik.conf
+SD_NAME = cik.service
 SRC_EXT = c
 
 SOURCES = $(shell find $(SRC_PATH) -name '*.$(SRC_EXT)' | sort -k 1nr | cut -f2-)
@@ -24,6 +25,7 @@ LDFLAGS =
 prefix = /usr/local
 bindir = $(prefix)/bin
 etcdir = /etc/cik
+sysdir = /lib/systemd/system
 
 .PHONY: release
 release: export CCFLAGS := $(CCFLAGS) $(COMPILER_FLAGS) -Winline -O3 -DDEBUG=0
@@ -61,8 +63,9 @@ run: debug
 
 .PHONY: install
 install: release
-	@$(INSTALL) $(BIN_PATH)/$(BIN_NAME) $(DESTDIR)$(bindir)/$(BIN_NAME)
-	@$(INSTALLDATA) ./$(CONF_NAME) $(DESTDIR)$(etcdir)/$(CONF_NAME)
+	@$(INSTALL) -D $(BIN_PATH)/$(BIN_NAME) $(DESTDIR)$(bindir)/$(BIN_NAME)
+	@$(INSTALLDATA) -D ./$(CONF_NAME) $(DESTDIR)$(etcdir)/$(CONF_NAME)
+	@$(INSTALLDATA) -D ./$(SD_NAME) $(DESTDIR)$(sysdir)/$(SD_NAME)
 
 $(BIN_PATH)/$(BIN_NAME): $(OBJECTS)
 	@echo "Linking: $@"
