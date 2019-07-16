@@ -1,0 +1,68 @@
+--- a/Makefile
++++ b/Makefile
+@@ -22,13 +22,13 @@
+ LIBS = -pthread $(shell pkg-config --libs libsystemd)
+ LDFLAGS =
+ 
+-prefix = /usr/local
++prefix = /usr
+ bindir = $(prefix)/bin
+ etcdir = /etc/cik
+ sysdir = /lib/systemd/system
+ 
+ .PHONY: release
+-release: export CCFLAGS := $(CCFLAGS) $(COMPILER_FLAGS) -Winline -O3 -DDEBUG=0
++release: export CCFLAGS := $(CCFLAGS) $(COMPILER_FLAGS) -ggdb -Winline -O3 -DDEBUG=0
+ release: dirs
+ 	@$(MAKE) all
+ 
+--- a/cik.conf
++++ b/cik.conf
+@@ -1,10 +1,10 @@
+-listen_address          = 0.0.0.0
++listen_address          = 127.0.0.1
+ listen_port             = 20274
+-pid_filename            = /tmp/cik-server.pid
+-log_filename            = /tmp/cik-server.log
+-persistence_filename    = /tmp/cik-server.persistent-data
+-entry_stats_filename    = /tmp/cik-server.entry-stats.tsv
+-tag_stats_filename      = /tmp/cik-server.tag-stats.tsv
+-memory_stats_filename   = /tmp/cik-server.memory-stats.tsv
+-client_stats_filename   = /tmp/cik-server.client-stats.tsv
+-worker_stats_filename   = /tmp/cik-server.worker-stats.tsv
++pid_filename            = /run/cik/cik-server.pid
++log_filename            = /var/log/cik/cik-server.log
++persistence_filename    = /var/log/cik/cik-server.persistent-data
++entry_stats_filename    = /var/log/cik/cik-server.entry-stats.tsv
++tag_stats_filename      = /var/log/cik/cik-server.tag-stats.tsv
++memory_stats_filename   = /var/log/cik/cik-server.memory-stats.tsv
++client_stats_filename   = /var/log/cik/cik-server.client-stats.tsv
++worker_stats_filename   = /var/log/cik/cik-server.worker-stats.tsv
+--- a/cik.service
++++ b/cik.service
+@@ -5,15 +5,19 @@
+ 
+ [Service]
+ Type=notify
+-ExecStart=/usr/local/bin/cik /etc/cik/cik.conf
+-ExecStartPre=-mkfifo /tmp/cik-server.log
+-ExecStopPost=-rm /tmp/cik-server.log
+-PIDFile=/tmp/cik-server.pid
++ExecStart=/usr/bin/cik /etc/cik/cik.conf
++ExecStartPre=-mkfifo /var/log/cik/cik-server.log
++ExecStopPost=-rm /var/log/cik/cik-server.log
++PIDFile=/run/cik/cik-server.pid
+ Restart=always
+-User=1000
+-Group=1000
++User=cik
++Group=cik
+ ProtectSystem=full
+ ProtectHome=yes
++ReadOnlyDirectories=/
++ReadWriteDirectories=-/var/lib/cik
++ReadWriteDirectories=-/var/log/cik
++ReadWriteDirectories=-/run/cik
+ 
+ [Install]
+ WantedBy=multi-user.target

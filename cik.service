@@ -10,8 +10,8 @@ ExecStartPre=-mkfifo /tmp/cik-server.log
 ExecStopPost=-rm /tmp/cik-server.log
 PIDFile=/tmp/cik-server.pid
 Restart=always
-User=cik
-Group=cik
+User=1000
+Group=1000
 ProtectSystem=full
 ProtectHome=yes
 
