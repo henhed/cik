@@ -1,11 +1,11 @@
 Source: cik-server
-Section: net
+Section: database
 Priority: optional
 Maintainer: Henrik Hedelund <debian@henhed.se>
 Build-Depends: debhelper (>= 11), libc6-dev (>= 2.24), libsystemd-dev (>= 232)
 Standards-Version: 4.3.0
-Vcs-Browser: https://github.com/henhed/cik
-Vcs-Git: git@github.com:henhed/cik.git
+Vcs-Browser: https://github.com/henhed/cik-server
+Vcs-Git: git@github.com:henhed/cik-server.git
 
 Package: cik-server
 Architecture: amd64

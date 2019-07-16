@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: cik-server
-Source: https://github.com/henhed/cik
+Source: https://github.com/henhed/cik-server
 
 Files: *
 Copyright: 2019 Henrik Hedelund <cik@henhed.se>
