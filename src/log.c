@@ -2,7 +2,7 @@
 
 #include "log.h"
 
-thread_local LogQueue *current_log_queue = NULL;
+tss_t current_log_queue = (tss_t) -1;
 
 static char *verbs[NUM_LOG_TYPES] = {
   [LOG_TYPE_REQUEST_GET_HIT]          = GREEN  ("GET"),
@@ -15,6 +15,22 @@ static char *verbs[NUM_LOG_TYPES] = {
   [LOG_TYPE_REQUEST_CLR_MATCH_ALL]    = YELLOW ("CLR"),
   [LOG_TYPE_REQUEST_CLR_MATCH_ANY]    = YELLOW ("CLR")
 };
+
+int
+init_log ()
+{
+  int err;
+
+  err = tss_create (&current_log_queue, NULL);
+  cik_assert (err == thrd_success);
+  cik_assert (current_log_queue != (tss_t) -1);
+  if (err != thrd_success)
+    return err;
+
+  tss_set (current_log_queue, NULL);
+
+  return 0;
+}
 
 bool
 enqueue_log_entry (LogQueue *q, LogEntry *e)
@@ -57,7 +73,7 @@ log_request_with_no_args (LogEntryType type, Client *client)
     .client_ip   = client->addr.sin_addr.s_addr,
     .client_port = client->addr.sin_port
   };
-  cik_assert (&client->worker->log_queue == current_log_queue);
+  cik_assert (&client->worker->log_queue == tss_get (current_log_queue));
   return enqueue_log_entry (&client->worker->log_queue, &entry);
 }
 
@@ -72,7 +88,7 @@ log_request_with_key (LogEntryType type, Client *client, CacheKey key)
     .data        = { [0] = key.nmemb }
   };
   memcpy (&entry.data[1], key.base, key.nmemb);
-  cik_assert (&client->worker->log_queue == current_log_queue);
+  cik_assert (&client->worker->log_queue == tss_get (current_log_queue));
   return enqueue_log_entry (&client->worker->log_queue, &entry);
 }
 
@@ -96,7 +112,7 @@ log_request_with_tags (LogEntryType type, Client *client,
       memcpy (&entry.data[nmemb], tags[t].base, tags[t].nmemb);
       nmemb += tags[t].nmemb;
     }
-  cik_assert (&client->worker->log_queue == current_log_queue);
+  cik_assert (&client->worker->log_queue == tss_get (current_log_queue));
   return enqueue_log_entry (&client->worker->log_queue, &entry);
 }
 

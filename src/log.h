@@ -73,10 +73,12 @@
   .elems = { { 0 } }                \
 }
 
-extern thread_local LogQueue *current_log_queue;
+extern tss_t current_log_queue;
 
-bool enqueue_log_entry (LogQueue *, LogEntry *);
-bool dequeue_log_entry (LogQueue *, LogEntry *);
+int  init_log                   (void);
+
+bool enqueue_log_entry          (LogQueue *, LogEntry *);
+bool dequeue_log_entry          (LogQueue *, LogEntry *);
 
 bool log_request_get_hit        (Client *, CacheKey);
 bool log_request_get_miss       (Client *, CacheKey);
@@ -93,9 +95,10 @@ void print_log_entry (LogEntry *, int);
 static inline bool
 log_entry (LogEntry *e)
 {
-  if (current_log_queue == NULL)
+  LogQueue *q = tss_get (current_log_queue);
+  if (q == NULL)
     return false;
-  return enqueue_log_entry (current_log_queue, e);
+  return enqueue_log_entry (q, e);
 }
 
 static inline bool

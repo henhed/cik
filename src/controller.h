@@ -3,6 +3,7 @@
 
 #include "types.h"
 
-StatusCode handle_request (Client *, Request *, Payload **);
+int         init_controller (void);
+StatusCode  handle_request  (Client *, Request *, Payload **);
 
 #endif /* ! CONTROLLER_H */

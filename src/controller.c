@@ -17,7 +17,23 @@
 # define ntohll(x) (((u64) ntohl ((x) & 0xFFFFFFFF) << 32) | ntohl ((x) >> 32))
 #endif
 
-static thread_local Client *current_client = NULL;
+static tss_t current_client = (tss_t) -1;
+
+int
+init_controller ()
+{
+  int err;
+
+  err = tss_create (&current_client, NULL);
+  cik_assert (err == thrd_success);
+  cik_assert (current_client != (tss_t) -1);
+  if (err != thrd_success)
+    return err;
+
+  tss_set (current_client, NULL);
+
+  return 0;
+}
 
 static inline CacheEntryHashMap *
 get_map_for_key (CacheKey key)
@@ -291,7 +307,7 @@ delete_entry_by_key (CacheKey key)
 {
   CacheEntry *entry = NULL;
 
-  log_request_del (current_client, key);
+  log_request_del (tss_get (current_client), key);
 
   // Unmap entry
   entry = lock_and_unset_cache_entry (get_map_for_key (key), key);
@@ -342,7 +358,7 @@ clear_all_callback (CacheEntry *entry, void *user_data)
 
   cik_assert (entry);
 
-  log_request_del (current_client, entry->key);
+  log_request_del (tss_get (current_client), entry->key);
 
   for (u8 t = 0; t < entry->tags.nmemb; ++t)
     remove_key_from_tag (entry->tags.base[t], entry->key);
@@ -588,8 +604,7 @@ handle_lst_request (Client *client, Request *request, Payload **response_payload
       {
         // Make virtual payload since we've already used part of it for tags and
         // we need to pass them to our walk callback without them being overwritten.
-        static thread_local Payload alt_payload;
-        alt_payload = (Payload) {
+        Payload alt_payload = {
           .base  = (buffer->base + buffer->nmemb),
           .nmemb = 0,
           .cap   = (buffer->cap - buffer->nmemb)
@@ -730,8 +745,8 @@ handle_request (Client *client, Request *request, Payload **response_payload)
       || (request->cik[2] != CONTROL_BYTE_3))
     return STATUS_PROTOCOL_ERROR;
 
-  current_client = client;
-  current_log_queue = &worker->log_queue;
+  tss_set (current_client, client);
+  tss_set (current_log_queue, &worker->log_queue);
 
   *response_payload = NULL;
 

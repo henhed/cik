@@ -14,6 +14,7 @@
 # include <systemd/sd-daemon.h>
 #endif
 
+#include "controller.h"
 #include "memory.h"
 #include "entry.h"
 #include "tag.h"
@@ -65,9 +66,6 @@ main (int argc, char **argv)
   sd_notifyf (0, "MAINPID=%lu", (unsigned long) getpid ());
 #endif
 
-  atomic_init (&quit, false);
-  atomic_init (&do_write_stats, false);
-
   ////////////////////////////////////////
   // Sanity checks
   {
@@ -94,6 +92,27 @@ main (int argc, char **argv)
 
   if (0 > init_memory ())
     return EXIT_FAILURE;
+
+  atomic_init (&quit, false);
+  atomic_init (&do_write_stats, false);
+
+  if (0 != init_util ())
+    {
+      err_print ("Failed to init utilities: %s\n", strerror (errno));
+      return EXIT_FAILURE;
+    }
+
+  if (0 != init_log ())
+    {
+      err_print ("Failed to init logging: %s\n", strerror (errno));
+      return EXIT_FAILURE;
+    }
+
+  if (0 != init_controller ())
+    {
+      err_print ("Failed to init controller: %s\n", strerror (errno));
+      return EXIT_FAILURE;
+    }
 
   for (u32 i = 0; i < NUM_CACHE_ENTRY_MAPS; ++i)
     init_cache_entry_map (entry_maps[i]);

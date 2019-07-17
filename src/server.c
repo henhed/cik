@@ -95,7 +95,7 @@ wait_for_new_connection (Server *server)
 {
   PROFILE (PROF_SERVER_ACCEPT);
 
-  static thread_local u32 worker_id = 0;
+  static u32 worker_id = 0;
 
   Client *client = NULL;
   epoll_event_t event = { 0 };
