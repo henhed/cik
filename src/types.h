@@ -7,8 +7,13 @@
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <threads.h>
 #include <time.h>
+
+#if __GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 28)
+# include <threads.h>
+#else
+# include "thrd-compat.h"
+#endif
 
 typedef int8_t   s8;
 typedef int16_t s16;

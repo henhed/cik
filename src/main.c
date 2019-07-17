@@ -7,7 +7,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/file.h>
-#include <threads.h>
 #include <unistd.h>
 
 #ifdef HAVE_SYSTEMD
@@ -148,8 +147,8 @@ main (int argc, char **argv)
   ////////////////////////////////////////
   // ... Profit
 
-  if (0 > thrd_create (&logging_thread, (thrd_start_t) run_logging_thread,
-                       (void *) config->log_filename))
+  if (thrd_create (&logging_thread, (thrd_start_t) run_logging_thread,
+                   (void *) config->log_filename) != thrd_success)
     err_print ("%s\n", strerror (errno));
 
   load_request_log (persistence_fd);

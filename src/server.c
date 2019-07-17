@@ -74,7 +74,8 @@ start_server (in_addr_t listen_address, in_port_t listen_port)
       worker->id = id;
       reserve_biggest_possible_payload (&worker->payload_buffer);
       worker->log_queue = LOG_QUEUE_INIT;
-      if (thrd_create (&worker->thread, (thrd_start_t) run_worker, worker) < 0)
+      if (thrd_create (&worker->thread, (thrd_start_t) run_worker, worker)
+          != thrd_success)
         {
           err_print ("%s\n", strerror (errno));
         }
@@ -82,7 +83,7 @@ start_server (in_addr_t listen_address, in_port_t listen_port)
 
   if (thrd_create (&server.accept_thread,
                    (thrd_start_t) run_accept_thread,
-                   &server) < 0)
+                   &server) != thrd_success)
     {
       err_print ("%s\n", strerror (errno));
     }
