@@ -1,10 +1,13 @@
 #ifndef THRD_COMPAT_H
 #define THRD_COMPAT_H 1
 
+#include <assert.h>
 #include <errno.h>
-#include <malloc.h>
 #include <pthread.h>
 #include <time.h>
+
+extern void    *reserve_memory  (uint32_t);
+extern void     release_memory  (void *);
 
 typedef pthread_t thrd_t;
 typedef pthread_key_t tss_t;
@@ -59,7 +62,8 @@ thrd_create (thrd_t *thr, thrd_start_t func, void *arg)
 {
   int err;
   struct _thrd_start_routine_arg *wrapper;
-  wrapper = malloc (sizeof (*wrapper)); // Sigh
+  wrapper = reserve_memory (sizeof (*wrapper));
+  assert (wrapper != NULL);
   wrapper->func = func;
   wrapper->arg = arg;
   wrapper->res = thrd_success;
@@ -85,7 +89,7 @@ thrd_join (thrd_t thr, int *res)
   if (res)
     *res = wrapper->res;
 
-  free (wrapper);
+  release_memory (wrapper);
 
   return thrd_success;
 }

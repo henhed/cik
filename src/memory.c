@@ -177,6 +177,8 @@ reserve_memory (u32 size)
   if (!bucket)
     {
       bucket = push_memory (TPADDED (Bucket) + PADDED (partition->size));
+      if (!bucket)
+        return NULL;
       bucket->data = ((u8 *) bucket) + TPADDED (Bucket);
       bucket->partition = partition;
     }
@@ -277,8 +279,11 @@ populate_nfo_response (NFOResponsePayload *nfo)
 void
 write_memory_stats (int fd)
 {
-  u32 memory_left = (((uintptr_t) main_memory + MAX_TOTAL_MEMORY)
-                     - atomic_load (&memory_cursor));
+  u32 memory_used = atomic_load (&memory_cursor) - (uintptr_t) main_memory;
+  u32 memory_left = 0;
+
+  if (MAX_TOTAL_MEMORY > memory_used)
+    memory_left = MAX_TOTAL_MEMORY - memory_used;
 
   dprintf (fd, "%s\t%s\t%s\t%s\t%s\n",
            "Size", "Used", "Free", "Reused", "Available");
