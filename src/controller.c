@@ -199,6 +199,8 @@ handle_set_request (Client *client, Request *request)
 
   // Read key
   status = read_request_key (client, key);
+  if (status != STATUS_OK)
+    return status;
 
   ++client->counters.set;
 
@@ -585,6 +587,7 @@ handle_lst_request (Client *client, Request *request, Payload **response_payload
           .payload = buffer
         };
         data.payload->nmemb = 0; // We don't care about input tags
+        log_request_lst_all_keys (client);
         walk_all_entries (list_all_keys_callback, &data);
         *response_payload = data.payload;
         return data.status;
@@ -596,6 +599,7 @@ handle_lst_request (Client *client, Request *request, Payload **response_payload
           .payload = buffer
         };
         data.payload->nmemb = 0; // We don't care about input tags
+        log_request_lst_all_tags (client);
         walk_all_tags ((CacheTagWalkCb) list_all_tags_callback, &data);
         *response_payload = data.payload;
         return data.status;
@@ -617,6 +621,7 @@ handle_lst_request (Client *client, Request *request, Payload **response_payload
           .tags.base  = tags,
           .tags.nmemb = ntags
         };
+        log_request_lst_match_none (client, tags, ntags);
         walk_all_entries (list_non_matching_callback, &data);
         *response_payload = data.base.payload;
         return data.base.status;
@@ -624,9 +629,17 @@ handle_lst_request (Client *client, Request *request, Payload **response_payload
     case LIST_MODE_MATCH_ALL: // Intentional fallthrough
     case LIST_MODE_MATCH_ANY:
       {
-        KeyElem *list = (mode == LIST_MODE_MATCH_ALL)
-          ? get_keys_matching_all_tags (tags, ntags)
-          : get_keys_matching_any_tag  (tags, ntags);
+        KeyElem *list = NULL;
+        if (mode == LIST_MODE_MATCH_ALL)
+          {
+            log_request_lst_match_all (client, tags, ntags);
+            list = get_keys_matching_all_tags (tags, ntags);
+          }
+        else
+          {
+            log_request_lst_match_any  (client, tags, ntags);
+            list = get_keys_matching_any_tag  (tags, ntags);
+          }
 
         status = STATUS_OK;
         buffer->nmemb = 0; // We're done with `tags' now
@@ -686,6 +699,8 @@ handle_nfo_request (Client *client, Request *request, Payload **response_payload
       if (status != STATUS_OK)
         return status;
 
+      log_request_nfo_key (client, key);
+
       entry = lock_and_get_cache_entry (get_map_for_key (key), key);
       if (!entry)
         return STATUS_NOT_FOUND;
@@ -714,6 +729,7 @@ handle_nfo_request (Client *client, Request *request, Payload **response_payload
     }
   else
     {
+      log_request_nfo (client);
       populate_nfo_response (nfo);
       nfo->server.bytes_reserved = htonl (nfo->server.bytes_reserved);
       nfo->server.bytes_used     = htonl (nfo->server.bytes_used);

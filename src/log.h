@@ -89,6 +89,13 @@ bool log_request_clr_old        (Client *);
 bool log_request_clr_match_none (Client *, CacheTag *, u8);
 bool log_request_clr_match_all  (Client *, CacheTag *, u8);
 bool log_request_clr_match_any  (Client *, CacheTag *, u8);
+bool log_request_lst_all_keys   (Client *);
+bool log_request_lst_all_tags   (Client *);
+bool log_request_lst_match_none (Client *, CacheTag *, u8);
+bool log_request_lst_match_all  (Client *, CacheTag *, u8);
+bool log_request_lst_match_any  (Client *, CacheTag *, u8);
+bool log_request_nfo            (Client *);
+bool log_request_nfo_key        (Client *, CacheKey);
 
 void print_log_entry (LogEntry *, int);
 

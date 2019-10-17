@@ -13,7 +13,14 @@ static char *verbs[NUM_LOG_TYPES] = {
   [LOG_TYPE_REQUEST_CLR_OLD]          = YELLOW ("CLR"),
   [LOG_TYPE_REQUEST_CLR_MATCH_NONE]   = YELLOW ("CLR"),
   [LOG_TYPE_REQUEST_CLR_MATCH_ALL]    = YELLOW ("CLR"),
-  [LOG_TYPE_REQUEST_CLR_MATCH_ANY]    = YELLOW ("CLR")
+  [LOG_TYPE_REQUEST_CLR_MATCH_ANY]    = YELLOW ("CLR"),
+  [LOG_TYPE_REQUEST_LST_ALL_KEYS]     = BLUE   ("LST"),
+  [LOG_TYPE_REQUEST_LST_ALL_TAGS]     = BLUE   ("LST"),
+  [LOG_TYPE_REQUEST_LST_MATCH_NONE]   = BLUE   ("LST"),
+  [LOG_TYPE_REQUEST_LST_MATCH_ALL]    = BLUE   ("LST"),
+  [LOG_TYPE_REQUEST_LST_MATCH_ANY]    = BLUE   ("LST"),
+  [LOG_TYPE_REQUEST_NFO]              = BLUE   ("NFO"),
+  [LOG_TYPE_REQUEST_NFO_KEY]          = BLUE   ("NFO")
 };
 
 int
@@ -173,6 +180,51 @@ log_request_clr_match_any (Client *client, CacheTag *tags, u8 ntags)
                                 tags, ntags);
 }
 
+bool
+log_request_lst_all_keys (Client *client)
+{
+  return log_request_with_no_args (LOG_TYPE_REQUEST_LST_ALL_KEYS, client);
+}
+
+bool
+log_request_lst_all_tags (Client *client)
+{
+  return log_request_with_no_args (LOG_TYPE_REQUEST_LST_ALL_TAGS, client);
+}
+
+bool
+log_request_lst_match_none (Client *client, CacheTag *tags, u8 ntags)
+{
+  return log_request_with_tags (LOG_TYPE_REQUEST_LST_MATCH_NONE, client,
+                                tags, ntags);
+}
+
+bool
+log_request_lst_match_all (Client *client, CacheTag *tags, u8 ntags)
+{
+  return log_request_with_tags (LOG_TYPE_REQUEST_LST_MATCH_ALL, client,
+                                tags, ntags);
+}
+
+bool
+log_request_lst_match_any (Client *client, CacheTag *tags, u8 ntags)
+{
+  return log_request_with_tags (LOG_TYPE_REQUEST_LST_MATCH_ANY, client,
+                                tags, ntags);
+}
+
+bool
+log_request_nfo (Client *client)
+{
+  return log_request_with_no_args (LOG_TYPE_REQUEST_NFO, client);
+}
+
+bool
+log_request_nfo_key (Client *client, CacheKey key)
+{
+  return log_request_with_key (LOG_TYPE_REQUEST_NFO_KEY, client, key);
+}
+
 void
 print_log_entry (LogEntry *e, int fd)
 {
@@ -202,7 +254,8 @@ print_log_entry (LogEntry *e, int fd)
     case LOG_TYPE_REQUEST_GET_HIT: // Intentional fallthrough
     case LOG_TYPE_REQUEST_GET_MISS: // Intentional fallthrough
     case LOG_TYPE_REQUEST_SET: // Intentional fallthrough
-    case LOG_TYPE_REQUEST_DEL:
+    case LOG_TYPE_REQUEST_DEL: // Intentional fallthrough
+    case LOG_TYPE_REQUEST_NFO_KEY:
       {
         CacheKey key = { .base = &e->data[1], .nmemb = e->data[0] };
         dprintf (fd, "'%s'", key2str (key));
@@ -217,14 +270,16 @@ print_log_entry (LogEntry *e, int fd)
     case LOG_TYPE_REQUEST_CLR_MATCH_NONE:
     case LOG_TYPE_REQUEST_CLR_MATCH_ALL:
     case LOG_TYPE_REQUEST_CLR_MATCH_ANY:
+    case LOG_TYPE_REQUEST_LST_MATCH_NONE:
+    case LOG_TYPE_REQUEST_LST_MATCH_ALL:
+    case LOG_TYPE_REQUEST_LST_MATCH_ANY:
       {
-        CacheTag tag = { .base = &e->data[1], .nmemb = e->data[0] };
-        dprintf (fd, "(MATCH %s)",
-                   ((e->type == LOG_TYPE_REQUEST_CLR_MATCH_NONE)
-                    ? "NONE"
-                    : ((e->type == LOG_TYPE_REQUEST_CLR_MATCH_ALL)
-                       ? "ALL"
-                       : "ANY")));
+        CacheTag tag    = { .base = &e->data[1], .nmemb = e->data[0] };
+        bool     is_all = ((e->type == LOG_TYPE_REQUEST_CLR_MATCH_ALL) ||
+                           (e->type == LOG_TYPE_REQUEST_LST_MATCH_ALL));
+        bool     is_any = ((e->type == LOG_TYPE_REQUEST_CLR_MATCH_ANY) ||
+                           (e->type == LOG_TYPE_REQUEST_LST_MATCH_ANY));
+        dprintf (fd, "(MATCH %s)", (is_all ? "ALL" : (is_any ? "ANY" : "NONE")));
         while (tag.nmemb > 0)
           {
             dprintf (fd, " '%s'", tag2str (tag));
@@ -234,6 +289,12 @@ print_log_entry (LogEntry *e, int fd)
           }
         break;
       }
+    case LOG_TYPE_REQUEST_LST_ALL_KEYS:
+      dprintf (fd, "(KEYS)");
+      break;
+    case LOG_TYPE_REQUEST_LST_ALL_TAGS:
+      dprintf (fd, "(TAGS)");
+      break;
     case LOG_TYPE_STRING:
       dprintf (fd, "%s", e->data);
       break;
