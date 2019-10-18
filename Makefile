@@ -17,12 +17,12 @@ SOURCES = $(shell find $(SRC_PATH) -name '*.$(SRC_EXT)' | sort -k 1nr | cut -f2-
 OBJECTS = $(SOURCES:$(SRC_PATH)/%.$(SRC_EXT)=$(BUILD_PATH)/%.o)
 DEPS = $(OBJECTS:.o=.d)
 
-COMPILER_FLAGS = -std=c11 -Wall -Wextra -Werror -D_GNU_SOURCE -DHAVE_SYSTEMD=1
+COMPILER_FLAGS = -std=c11 -Wall -Wextra -Werror -ggdb -D_GNU_SOURCE -DHAVE_SYSTEMD=1
 INCLUDES = -I include/
 LIBS = -pthread $(shell pkg-config --libs libsystemd)
 LDFLAGS =
 
-prefix = /usr/local
+prefix = /usr
 bindir = $(prefix)/bin
 etcdir = /etc/cik
 sysdir = /lib/systemd/system
@@ -33,7 +33,7 @@ release: dirs
 	@$(MAKE) all
 
 .PHONY: debug
-debug: export CCFLAGS := $(CCFLAGS) $(COMPILER_FLAGS) -ggdb -DDEBUG=1
+debug: export CCFLAGS := $(CCFLAGS) $(COMPILER_FLAGS) -DDEBUG=1
 debug: dirs
 	@$(MAKE) all
 
