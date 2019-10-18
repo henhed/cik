@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <time.h>
 
 extern void    *reserve_memory  (uint32_t);

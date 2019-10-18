@@ -10,9 +10,9 @@
 #include "profiler.h"
 #include "server.h"
 
-static Server server = { 0 };
-static Client clients[MAX_NUM_CLIENTS] = {{ 0 }};
-static Worker workers[NUM_WORKERS] = {{ 0 }};
+static Server server = {};
+static Client clients[MAX_NUM_CLIENTS] = {};
+static Worker workers[NUM_WORKERS] = {};
 
 static int run_worker        (Worker *);
 static int run_accept_thread (Server *);
@@ -20,7 +20,7 @@ static int run_accept_thread (Server *);
 int
 start_server (in_addr_t listen_address, in_port_t listen_port)
 {
-  epoll_event_t event = { 0 };
+  epoll_event_t event = {};
   int enable_tcp_nodelay = 1;
 
   for (u32 i = 0; i < MAX_NUM_CLIENTS; ++i)
@@ -99,7 +99,7 @@ wait_for_new_connection (Server *server)
   static u32 worker_id = 0;
 
   Client *client = NULL;
-  epoll_event_t event = { 0 };
+  epoll_event_t event = {};
   int nevents;
 
   nevents = epoll_wait (server->epfd, &event, 1, WORKER_EPOLL_TIMEOUT);
@@ -146,7 +146,7 @@ wait_for_new_connection (Server *server)
 
   client->worker = &workers[worker_id];
 
-  event = (epoll_event_t) { 0 };
+  event = (epoll_event_t) {};
   event.events = EPOLLIN | EPOLLERR | EPOLLHUP;
   event.data.ptr = client;
   if (0 > epoll_ctl (client->worker->epfd, EPOLL_CTL_ADD, client->fd, &event))
@@ -206,7 +206,7 @@ process_worker_events (Worker *worker)
 {
   PROFILE (PROF_SERVER_READ);
 
-  epoll_event_t events[MAX_NUM_EVENTS] = {{ 0 }};
+  epoll_event_t events[MAX_NUM_EVENTS] = {};
   int nevents = epoll_wait (worker->epfd, events,
                             MAX_NUM_EVENTS, WORKER_EPOLL_TIMEOUT);
   if (nevents < 0)
@@ -230,8 +230,8 @@ process_worker_events (Worker *worker)
       if (event->events & EPOLLIN)
         {
           Client    *client   = event->data.ptr;
-          Request    request  = { 0 };
-          Response   response = { 0 };
+          Request    request  = {};
+          Response   response = {};
           Payload   *payload  = NULL;
           StatusCode status;
 
@@ -314,7 +314,7 @@ run_worker (Worker *worker)
 
   close (worker->epfd);
   release_memory (worker->payload_buffer.base);
-  worker->payload_buffer = (Payload) { 0 };
+  worker->payload_buffer = (Payload) {};
 
   return thrd_success;
 }

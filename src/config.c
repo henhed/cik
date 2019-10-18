@@ -120,7 +120,7 @@ parse_variable (const char *filename, int lineno, const char *name, char *value)
 {
   if (0 == strcmp(name, "listen_address"))
     {
-      struct addrinfo  hints = { 0 };
+      struct addrinfo  hints = {};
       struct addrinfo *result, *rp;
       int err;
       bool found;

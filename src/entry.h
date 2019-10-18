@@ -3,9 +3,9 @@
 
 #include "types.h"
 
-#define CACHE_KEY_INIT     { 0 }
-#define CACHE_VALUE_INIT   { 0 }
-#define CACHE_TAGS_INIT    { 0 }
+#define CACHE_KEY_INIT     {}
+#define CACHE_VALUE_INIT   {}
+#define CACHE_TAGS_INIT    {}
 #define CACHE_EXPIRES_INIT ((time_t) -1)
 #define CACHE_MTIME_INIT   (time (NULL))
 

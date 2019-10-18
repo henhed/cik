@@ -70,7 +70,7 @@
   .mask = NUM_LOG_QUEUE_ELEMS - 1,  \
   .read = ATOMIC_VAR_INIT (0),      \
   .write = ATOMIC_VAR_INIT (0),     \
-  .elems = { { 0 } }                \
+  .elems = {}                       \
 }
 
 extern tss_t current_log_queue;
@@ -113,7 +113,7 @@ logprintf (const char *fmt, ...)
 {
   LogEntry entry = {
     .type = LOG_TYPE_STRING,
-    .data = { 0 }
+    .data = {}
   };
   va_list ap;
   va_start (ap, fmt);

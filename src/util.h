@@ -3,6 +3,8 @@
 
 #include "types.h"
 
+#define ARRAY_COUNT(array) (sizeof (array) / sizeof ((array)[0]))
+
 int         init_util   (void);
 const char *key2str     (CacheKey);
 const char *tag2str     (CacheTag);

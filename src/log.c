@@ -108,17 +108,18 @@ log_request_with_tags (LogEntryType type, Client *client,
     .worker_id   = client->worker->id,
     .client_ip   = client->addr.sin_addr.s_addr,
     .client_port = client->addr.sin_port,
-    .data        = { 0 }
+    .data        = {}
   };
   u8 nmemb = 0;
   for (u8 t = 0; t < ntags; ++t)
     {
-      if ((nmemb + 1 + tags[t].nmemb) > 0x100)
+      if ((nmemb + 1u + tags[t].nmemb) > ARRAY_COUNT (entry.data))
         break;
       entry.data[nmemb++] = tags[t].nmemb;
       memcpy (&entry.data[nmemb], tags[t].base, tags[t].nmemb);
       nmemb += tags[t].nmemb;
     }
+  cik_assert (entry.data[nmemb] == 0);
   cik_assert (&client->worker->log_queue == tss_get (current_log_queue));
   return enqueue_log_entry (&client->worker->log_queue, &entry);
 }

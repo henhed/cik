@@ -29,7 +29,7 @@ static const char *profiler_names[NUM_PROFILERS] = {
   [PROF_CLOSE_CLIENT]       = "close_client"
 };
 
-static ProfilerData profiler_data[NUM_PROFILERS] = { 0 };
+static ProfilerData profiler_data[NUM_PROFILERS] = {};
 static Profiler current_profiler = PROF_MAIN;
 
 Profiler
